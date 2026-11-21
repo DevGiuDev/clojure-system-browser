@@ -4,8 +4,12 @@
  :aliases
  {:test {:extra-paths ["test"] :main-opts ["-m" "csb.test-runner"]}
   :cli {:main-opts ["-m" "csb.cli"]}
-  :desktop {:extra-paths ["apps/desktop/src"]
+  :live-test {:extra-paths ["apps/live/src" "test-live"]
+              :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}}
+              :main-opts ["-m" "csb.repl-test"]}
+  :desktop {:extra-paths ["apps/desktop/src" "apps/live/src"]
             :extra-deps {cljfx/cljfx {:mvn/version "1.10.363"}
+                         nrepl/nrepl {:mvn/version "1.7.0"}
                          org.fxmisc.richtext/richtextfx {:mvn/version "0.11.7"}
                          org.openjfx/javafx-controls {:mvn/version "27.0.1"}}
             :override-deps {org.openjfx/javafx-base {:mvn/version "27.0.1"}
@@ -19,8 +23,9 @@
                  :jvm-opts ["-Dglass.platform=Headless" "-Dprism.order=sw"
                             "-Djavafx.cachedir=.cache/javafx"]
                  :main-opts ["-m" "csb.desktop-smoke"]}
-  :tui {:extra-paths ["apps/tui/src"]
-        :extra-deps {com.googlecode.lanterna/lanterna {:mvn/version "3.1.5"}}
+  :tui {:extra-paths ["apps/tui/src" "apps/live/src"]
+        :extra-deps {com.googlecode.lanterna/lanterna {:mvn/version "3.1.5"}
+                     nrepl/nrepl {:mvn/version "1.7.0"}}
         :main-opts ["-m" "csb.tui"]}
   :tui-test {:extra-paths ["test-tui" "test-support"] :main-opts ["-m" "csb.tui-smoke"]}
   :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}

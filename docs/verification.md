@@ -1,17 +1,17 @@
 # Implementation verification
 
 Date: 2026-11-15. Updated: 2026-11-21. This record distinguishes checks that
-were executed from prepared verifications. No REPL has been started or
-connected.
+were executed from prepared verifications.
 
 ## Summary of the latest recorded results
 
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
 | Core, external editor, lexical classifier, source order, facets and Polylith discovery | 48 | 371 | No failures or errors; JDK 27 and 21 |
-| Desktop with headless JavaFX controls | 8 | 90 | No failures or errors; JDK 27 |
-| TUI with virtual terminal | 13 | 201 | No failures or errors; JDK 27 |
-| Suite total | **69** | **662** | No failures or errors |
+| Desktop with headless JavaFX controls | 10 | 98 | No failures or errors; JDK 27 |
+| TUI with virtual terminal | 16 | 213 | No failures or errors; JDK 27 |
+| Local nREPL integration | 5 | 24 | No failures or errors; JDK 27 |
+| Suite total | **79** | **706** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | **40 checks**, no failures |
 | clj-kondo | — | — | 0 errors, 0 warnings |
 
@@ -35,6 +35,27 @@ clean.
 order view, read-only) with automated verification in all three suites.
 Forward-reference diagnostics, load validation and write operations with
 placement remain unimplemented.
+
+## Local nREPL panel (2026-11-21)
+
+- Desktop and virtual TUI tests checked prefill from the open project's
+  `.nrepl-port`, invalid content, manual overrides and a project switch.
+  Both clients also connected to a separate nREPL using the prefilled port.
+- Ran `clojure -Srepro -M:live-test` with JDK 27 and nREPL 1.7.0 over
+  loopback. Checked persistent namespace, streamed output, stderr, values,
+  evaluation errors, print quota, definition evaluation, timeouts,
+  interruption before and during execution, and reconnection after EOF.
+- Exercised the Desktop controls with the graphical JavaFX GTK backend
+  under Xvfb against a separate nREPL JVM. The evaluated draft stayed on
+  screen and left the file byte-for-byte intact. Saving a different definition
+  changed the file while the runtime retained the evaluated definition.
+  Also checked multiline input, output, interruption and disconnect.
+- Drove the packaged TUI in a POSIX pseudoterminal against the same external
+  server. Checked entry with a real newline, F5 evaluation, F6 evaluation of
+  the selected definition, F7 interruption, visible connection loss and
+  clean exit. The source file was byte-for-byte intact.
+- These were automated interactions on Linux. Manual acceptance in the
+  user's Emacs/EXWM session and the platform matrix remain pending.
 
 ## Observed environment
 

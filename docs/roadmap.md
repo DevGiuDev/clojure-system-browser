@@ -1,5 +1,16 @@
 # Roadmap
 
+## Live World panel — 2026-11-21
+
+The first slice of milestone 5 adds the local nREPL panel to Desktop and TUI.
+Both offer explicit connection to a running JVM, a multiline console, evaluation
+of the selected definition, a transcript, interruption and disconnection. The
+clients share the runtime adapter. See [ADR 013](decisions/013-local-repl-panel.md).
+
+The remaining milestone 5 work covers runtime namespace and var exploration,
+metadata and conservative Live/Combined views. The Test Runner follows in
+milestone 6. The Source World manual acceptance matrix remains tracked separately.
+
 ## Recorded progress — 2026-11-21
 
 Implemented the source order view (option 1 of
@@ -40,9 +51,8 @@ scope. The workflow ran successfully on the `v0.2.0` tag (its first remote
 execution, run 44950510002) and the published assets were exercised
 locally; test CI remains removed.
 
-Latest recorded verification: **69 tests / 662 assertions**, **40 process
-checks** and clean lint. Live World/nREPL and the Test Runner remain
-unimplemented.
+Verification before the REPL panel: **69 tests / 662 assertions**, **40 process
+checks** and clean lint.
 
 ## Recorded progress — 2026-11-15
 
@@ -67,7 +77,7 @@ checks** and clean lint. See [verification](verification.md) and
 | 2: Desktop | Four panels, syntax highlighting, filter, draft, Save/Discard/Reload; controls, colors, selection, undo, shortcut, conflicts and errors tested headless with JDK 27 | Full visual demonstration and manual interaction |
 | 3: TUI | Dark/light themes with `t`, lexical highlighting shared with Desktop, contrast and change-driven refresh; virtual terminal and 40 checks with pseudoterminal/real Vim; Save/Ctrl+S, conflicts, permissions and terminal restoration | Full manual interaction, highlighting inside Emacs/EXWM and per-platform behavior |
 | 4: polish/extension | Registry v1, command, view and documentation | Validation of both clients and system matrix |
-| 5: Live World | Not implemented | After the MVP closes |
+| 5: Live World | Local nREPL panel and explicit evaluation | Runtime inspection and Live/Combined views |
 | 6: Test Runner | Not implemented | After validating nREPL |
 
 ## Next verifiable step
@@ -129,12 +139,7 @@ index or writing, and adds no Live World features.
 
 **First step implemented (2026-11-21)**: the source order view shows the real
 per-file order and the context of definitions, without modifying sources
-([ADR 008](decisions/008-source-order-view.md)). Still pending, before
-extending write operations or designing Live World evaluation, are the
-conservative forward-reference diagnostics and the explicit placement or
-`declare` options. Automatic code reordering has not been implemented nor
-been decided on.
-
-Before Live World, persistent IDs, per-connection capabilities, sessions,
-cancellation and partial results will be reviewed. Stable available versions
-will be verified again. nREPL is not added to the MVP classpath.
+([ADR 008](decisions/008-source-order-view.md)). Conservative forward-reference
+diagnostics and explicit placement or `declare` options remain open for future
+write operations. The initial REPL panel evaluates only the text submitted
+explicitly by the user.

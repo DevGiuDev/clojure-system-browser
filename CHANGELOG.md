@@ -6,6 +6,12 @@ version lives in `csb.cli/version` and is kept in sync with this file
 manually ([ADR 011](docs/decisions/011-versioning-changelog.md)). While the
 project is 0.x, minor bumps carry features and the MVP stays free to evolve.
 
+## [Unreleased]
+
+- Local nREPL panel in Desktop and TUI with a multiline console, explicit
+  definition evaluation, streamed output and interruption (ADR 013).
+- Prefill the nREPL port from `.nrepl-port` in the open project's root.
+
 ## [0.2.0] - 2026-11-21
 
 ### Added

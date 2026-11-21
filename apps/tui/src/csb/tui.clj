@@ -1,11 +1,15 @@
 (ns csb.tui
-  (:require [csb.cli :as cli]
+  (:require [clojure.string :as str]
+            [csb.cli :as cli]
             [csb.editor :as editor]
+            [csb.repl :as repl]
             [csb.service :as service]
             [csb.session :as session]
             [csb.tui-terminal :as terminal]
             [csb.tui-view :as view])
-  (:import [com.googlecode.lanterna.input KeyStroke KeyType]
+  (:import [com.googlecode.lanterna TerminalSize]
+           [com.googlecode.lanterna.gui2 TextBox TextBox$Style]
+           [com.googlecode.lanterna.input KeyStroke KeyType]
            [com.googlecode.lanterna.screen TerminalScreen]
            [com.googlecode.lanterna.terminal DefaultTerminalFactory])
   ;; Generates the class with the static main the release uberjar needs
@@ -83,19 +87,68 @@
                                   (str "Unsaved draft retained at " (get-in recovered [:value :temp]))
                                   (str "Could not retain unsaved draft: " (get-in recovered [:error :message]))))))
 
+(defn- edit-repl! [state ^KeyStroke key field]
+  (let [s @state
+        [row column] (get-in s [:repl-caret field] [0 0])
+        [first-line & more] (str/split (get-in s [:repl field] "") #"\n" -1)
+        widget (TextBox. ^String first-line
+                         (if (= field :input) TextBox$Style/MULTI_LINE TextBox$Style/SINGLE_LINE))]
+    ;; TextBox.setText drops trailing empty lines. Add them explicitly.
+    (doseq [line more] (.addLine widget line))
+    (.setCaretWarp widget true)
+    (.setCaretPosition widget (int row) (int column))
+    (.handleKeyStroke widget key)
+    (let [caret (.getCaretPosition widget)
+          text (.getText widget)]
+      (swap! state (fn [s]
+                     (assoc-in (if (= field :port)
+                                 (update s :repl repl/edit-port text)
+                                 (assoc-in s [:repl :input] text))
+                               [:repl-caret field] [(.getRow caret) (.getColumn caret)]))))))
+
+(defn- repl-key! [state ^KeyStroke key ^TerminalSize size]
+  (let [type (.getKeyType key)
+        phase (get-in @state [:repl :phase])
+        connected? (= :connected phase)
+        disconnected? (contains? #{nil :disconnected} phase)
+        scroll-step (view/repl-page-size (.getRows size))]
+    (cond
+      (= type KeyType/Escape) (swap! state assoc :repl-open? false)
+      (= type KeyType/F8) (repl/disconnect! state)
+      (= type KeyType/PageUp)
+      (swap! state (fn [s]
+                     (let [line-count (count (view/repl-lines (:repl s) (.getColumns size)))]
+                       (assoc s :repl-scroll (min (max 0 (- line-count scroll-step))
+                                                  (+ scroll-step (get s :repl-scroll 0)))))))
+      (= type KeyType/PageDown) (swap! state update :repl-scroll #(max 0 (- (or % 0) scroll-step)))
+      (and disconnected? (= type KeyType/Enter))
+      (do (swap! state assoc :repl-scroll 0) (repl/connect! state))
+      (and connected? (= type KeyType/F5))
+      (do (repl/evaluate-input! state)
+          (when (empty? (get-in @state [:repl :input]))
+            (swap! state assoc :repl-scroll 0 :repl-caret (dissoc (:repl-caret @state) :input))))
+      (and connected? (= type KeyType/F6))
+      (do (repl/evaluate-definition! state) (swap! state assoc :repl-scroll 0))
+      (and connected? (= type KeyType/F7)) (repl/interrupt! state)
+      (and (or disconnected? connected?) (not (.isCtrlDown key)) (not (.isAltDown key)))
+      (edit-repl! state key (if connected? :input :port)))))
+
 (defn- step! [^TerminalScreen screen state last-frame]
   (render-if-changed! screen @state last-frame)
   (let [^KeyStroke key (.pollInput screen)
         type (when key (.getKeyType key))
         ch (when key (.getCharacter key))
-        page-size (view/page-size (.getRows (.getTerminalSize screen)))
+        size (.getTerminalSize screen)
+        page-size (view/page-size (.getRows size))
+        repl-open? (:repl-open? @state)
         eof? (= type KeyType/EOF)
-        quit? (= ch \q)]
+        quit? (and (not repl-open?) (= ch \q))]
     (when (and eof? (:dirty? @state)) (retain-draft! state))
     (if (or eof? (and quit? (not (:dirty? @state))))
       false
       (do
         (cond
+          repl-open? (when key (repl-key! state key size))
           quit? (swap! state assoc :status "Unsaved changes: s to Save or d to Discard, then q")
           (= type KeyType/Tab) (swap! state update :focus #(mod (inc (or % 0)) 3))
           (= type KeyType/ArrowRight) (swap! state update :focus #(mod (inc (or % 0)) 3))
@@ -108,6 +161,8 @@
           (= ch \!) (swap! state #(assoc % :diagnostics? (not (:diagnostics? %)) :help? false :scroll 0))
           (= ch \o) (swap! state #(assoc % :source-order? (not (:source-order? %))
                                            :help? false :diagnostics? false :scroll 0))
+          (= ch \p) (do (repl/show-panel! state)
+                         (swap! state #(assoc-in % [:repl-caret :port] [0 (count (get-in % [:repl :port]))])))
           (= type KeyType/Escape) (swap! state assoc :editor-error nil :help? false :diagnostics? false
                                          :source-order? false :scroll 0)
           (= ch \s) (session/save! state)
@@ -131,7 +186,7 @@
     (.setCursorPosition screen nil)
     (let [last-frame (volatile! nil)]
       (loop [] (when (step! screen state last-frame) (recur))))
-    (finally (.close screen))))
+    (finally (repl/disconnect! state) (.close screen))))
 
 (defn -main [& args]
   (try

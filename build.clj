@@ -19,10 +19,10 @@
 
 (defn uber
   "Build target/clojure-system-browser-<version>.jar with csb.tui as main.
-   Only the core sources and the TUI enter the jar; no JavaFX or cljfx."
+   Includes the core, the TUI and the nREPL client."
   [_]
   (let [v (read-version)]
-    (b/copy-dir {:src-dirs ["src" "apps/tui/src"] :target-dir class-dir})
+    (b/copy-dir {:src-dirs ["src" "apps/tui/src" "apps/live/src"] :target-dir class-dir})
     (b/compile-clj {:basis basis :class-dir class-dir :ns-compile [main]})
     (b/uber {:basis basis :class-dir class-dir :main main
              :uber-file (str "target/clojure-system-browser-" v ".jar")})))

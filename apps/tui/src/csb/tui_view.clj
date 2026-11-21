@@ -1,6 +1,7 @@
 (ns csb.tui-view
   "Terminal presentation with explicit colours, independent of the shell theme."
   (:require [clojure.string :as str]
+            [csb.repl :as repl]
             [csb.service :as service]
             [csb.session :as session]
             [csb.syntax :as syntax])
@@ -94,6 +95,7 @@
        "e: edit definition in $EDITOR (external editor)\ns / Ctrl+S: Save · d: Discard · r: Reload\n"
        "t: toggle dark/light theme\nx: example command · v: extension view\n"
        "o: source order (real file order of top-level forms)\n"
+       "p: nREPL panel\n"
        "!: source diagnostics · q: quit · ?: help · Esc: source\nAfter an external edit, press s to save explicitly."))
 
 (defn- editor-error-text [{:keys [error argv temp]} width]
@@ -187,6 +189,58 @@
           (code-line! g palette width (+ top i) line)
           (text! g width 2 (+ top i) line))))))
 
+(defn repl-page-size [height] (max 1 (- height 11)))
+
+(defn repl-lines [panel width]
+  (vec (TerminalTextUtils/getWordWrappedText
+        (max 1 (- width 3)) (into-array String (str/split-lines (repl/transcript panel))))))
+
+(defn- repl-input! [^TerminalScreen screen g palette width x y rows text [row column]]
+  (let [lines (str/split (or text "") #"\n" -1)
+        row (min (or row 0) (dec (count lines)))
+        line (nth lines row)
+        column (min (or column 0) (count line))
+        caret (TerminalTextUtils/getColumnWidth (subs line 0 column))
+        first-row (max 0 (- row (dec rows)))
+        space (- width x 1)
+        left (max 0 (- caret (dec space)))]
+    (style! g palette :text :surface)
+    (rectangle! g x y (- width x) rows)
+    (doseq [[index text] (map-indexed vector (take rows (drop first-row lines)))]
+      (text! g width x (+ y index) (TerminalTextUtils/fitString text left space)))
+    (.setCursorPosition screen (TerminalPosition. (+ x (- caret left)) (+ y (- row first-row))))))
+
+(defn- repl-panel! [^TerminalScreen screen g palette width height state]
+  (let [{:keys [phase namespace status port input] :as panel} (:repl state)
+        connected? (= :connected phase)
+        disconnected? (contains? #{nil :disconnected} phase)
+        rows (repl-page-size height)
+        lines (repl-lines panel width)
+        start (max 0 (- (count lines) rows (get state :repl-scroll 0)))]
+    (bar! g palette width 0 :accent :raised
+          (str "nREPL · 127.0.0.1" (when-not disconnected? (str ":" port))
+               (when namespace (str " · " namespace)) (when (:dirty? state) " · UNSAVED SOURCE")))
+    (bar! g palette width 1 :text :background (or status "Disconnected"))
+    (bar! g palette width 2 :muted :raised "Transcript · PgUp/PgDn")
+    (style! g palette :text :background)
+    (doseq [[index text] (map-indexed vector (take rows (drop start lines)))]
+      (text! g width 1 (+ 3 index) text))
+    (cond
+      connected?
+      (do
+        (bar! g palette width (- height 8) :accent :raised "Clojure expression · Enter: newline")
+        (repl-input! screen g palette width 1 (- height 7) 4 input (get-in state [:repl-caret :input])))
+      disconnected?
+      (do
+        (bar! g palette width (- height 7) :accent :surface "Port:")
+        (repl-input! screen g palette width 7 (- height 7) 1 port (get-in state [:repl-caret :port]))))
+    (bar! g palette width (- height 2) :text :background
+          (if connected?
+            "F5: evaluate · F6: evaluate definition · F7: interrupt"
+            (if disconnected? "Enter: connect" "F8: disconnect")))
+    (bar! g palette width (dec height) :muted :background
+          (if connected? "Esc: source · F8: disconnect" "Esc: source"))))
+
 (defn draw! [^TerminalScreen screen state full?]
   (let [size (.getTerminalSize screen)
         width (.getColumns size) height (.getRows size)
@@ -197,9 +251,13 @@
     ;; Paint only the back buffer. Screen.clear requests a full terminal erase.
     (style! g palette :text :background)
     (.fill g \space)
-    (if (or (< width 60) (< height 16))
+    (.setCursorPosition screen nil)
+    (cond
+      (or (< width 60) (< height 16))
       (do (text! g width 0 0 "Resize terminal to at least 60 × 16")
-          (when (> height 1) (text! g width 0 1 "q: quit · t: theme")))
+          (when (> height 1) (text! g width 0 1 (if (:repl-open? state) "Esc: source" "q: quit · t: theme"))))
+      (:repl-open? state) (repl-panel! screen g palette width height state)
+      :else
       (do
         (bar! g palette width 0 :accent :raised "CLOJURE SYSTEM BROWSER · Source World")
         (style! g palette :muted :background)
@@ -214,7 +272,7 @@
                     (:dirty? state) :warning :else :text)
               :raised status)
         (bar! g palette width (dec height) :muted :background
-              "q: quit · ?: help · !: errors · o: order · Tab: focus · ↑↓: select · e: edit · s: Save · t: theme")))
+              "q: quit · ?: help · p: REPL · !: errors · o: order · Tab: focus · ↑↓: select · e: edit · s: Save · t: theme")))
     ;; A full repaint is necessary when the physical terminal has been reset.
     ;; Otherwise even large changes (such as themes) can be sent without an erase.
     (.refresh screen (if full? Screen$RefreshType/COMPLETE Screen$RefreshType/DELTA))))

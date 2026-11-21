@@ -1,13 +1,15 @@
 # Architecture
 
 A single `deps.edn` project, with namespace boundaries and per-client aliases.
-There are no empty modules for future features. No server or remote protocol
-is started.
+Desktop and TUI can attach to a separately started local nREPL on request.
 
 ```mermaid
 flowchart TD
   Desktop["Desktop: cljfx / JavaFX"] --> Session["Session: selection and draft"]
   TUI["TUI: Lanterna"] --> Session
+  Desktop --> REPL["Shared nREPL panel state and adapter"]
+  TUI --> REPL
+  REPL --> JVM["External JVM on loopback"]
   Session --> Service["Browser Service"]
   CLI["CLI: EDN index"] --> Service
   Service --> Ports["Model and SourceStore port"]
@@ -29,6 +31,7 @@ parsers, ranges, zippers or internal paths to write.
 | `csb.editor` | Temporaries and external editor processes |
 | `csb.extensions` | API v1, registry, collisions, capabilities and dispatch |
 | `csb.cli` | Arguments and EDN output of the index |
+| `csb.repl` | Shared connection, evaluation and transcript for the optional nREPL panel |
 | `csb.desktop` | cljfx descriptions and adaptation to JavaFX events |
 | `csb.syntax` | Lexical text classification for both clients, with no UI, reading or semantic-validation dependencies |
 | `csb.desktop.code-editor` | CodeArea life cycle and application of Desktop styles |
@@ -71,9 +74,8 @@ session; the clients neither parse nor index. See
 [ADR 008](decisions/008-source-order-view.md) and
 [the design note](definition-order.md).
 
-Order is semantically relevant in Clojure. Future design must keep navigation
-order, persisted position and — once Live World exists — the requested
-evaluation order separate. Displaying or validating references without
+Order is semantically relevant in Clojure. Navigation order, persisted
+position and the requested evaluation order are separate. Displaying or validating references without
 executing sources is not equivalent to demonstrating that the file loads.
 [The definition-order note](definition-order.md) records the problem, the
 current limits and the options that remain open.
@@ -146,11 +148,25 @@ Initial views are presented as textual data. The grammar for complex views
 will be defined from real Test Runner needs. Extensions are trusted code in
 the same JVM, with no security isolation.
 
+## Live World panel
+
+The clients submit explicit actions to `csb.repl`. A worker owns each
+connection and persistent nREPL session, negotiates capabilities with
+`describe`, and updates the shared UI state as replies arrive. The request
+ID ties each result to the current evaluation. Desktop consumes state
+updates through cljfx. The TUI gives the panel its own input mode and paints
+updates through its existing terminal loop.
+
+Definition evaluation uses the visible text and an explicit namespace for
+that request. The console keeps its session namespace. Source Save and the
+runtime run on separate paths. See [ADR 013](decisions/013-local-repl-panel.md).
+
 ## Dependency boundaries
 
 The `:desktop` and `:tui` aliases are independent. Neither the base classpath
 nor `:test` includes JavaFX, Lanterna or nREPL. Neither does `:tui` include
-JavaFX. The Runtime Adapter and Test Runner will come after the MVP.
+JavaFX. Both UI aliases include the runtime adapter in `apps/live/src` and
+nREPL. The independent `:live-test` alias exercises the TCP adapter.
 
 The Desktop editor uses RichTextFX exclusively in the `:desktop` alias.
 The shared lexical classifier `csb.syntax` tolerates incomplete text, does not

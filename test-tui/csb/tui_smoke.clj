@@ -64,6 +64,59 @@
   (press! ui KeyType/Tab)
   (navigate! ui KeyType/ArrowDown #(= 'total (get-in @state [:definition :name]))))
 
+(deftest repl-panel-keeps-port-input-separate-from-source-shortcuts
+  (fixture/with-example
+   (fn [root]
+     (with-terminal root
+       (fn [{:keys [state] :as ui}]
+         (total! ui)
+         (session/edit! state fixture/total-draft)
+         (press! ui \p)
+         (is (str/includes? (frame ui) "nREPL"))
+         (is (press! ui \q) "A character in the panel does not quit")
+         (press! ui \s)
+         (is (:dirty? @state) "A character in the panel does not save")
+         (doseq [key "65536"] (press! ui key))
+         (press! ui KeyType/Enter)
+         (is (str/includes? (frame ui) "Enter a port"))
+         (press! ui KeyType/Escape)
+         (is (str/includes? (frame ui) "(defn total"))
+         (is (= fixture/total-draft (:draft @state))))))))
+
+(deftest repl-input-preserves-newlines-and-ignores-source-commands
+  (with-terminal nil
+    (fn [{:keys [state] :as ui}]
+      (swap! state assoc :repl {:phase :connected :namespace "user"})
+      (press! ui \p)
+      (doseq [key "(str \"q\""] (press! ui key))
+      (press! ui KeyType/Enter)
+      (doseq [key " \"s\")"] (press! ui key))
+      (is (= "(str \"q\"\n \"s\")" (get-in @state [:repl :input])))
+      (press! ui KeyType/ArrowLeft)
+      (press! ui KeyType/Backspace)
+      (is (= "(str \"q\"\n \"s)" (get-in @state [:repl :input])))
+      (press! ui KeyType/Escape)
+      (is (= "Open a project" (:status @state))))))
+
+(deftest repl-port-is-read-from-the-project-and-can-be-edited
+  (fixture/with-example
+   (fn [root]
+     (let [port-file (.resolve root ".nrepl-port")]
+       (fixture/write! port-file "65536\n")
+       (with-terminal root
+         (fn [{:keys [state] :as ui}]
+           (press! ui \p)
+           (is (str/blank? (get-in @state [:repl :port])))
+           (press! ui KeyType/Escape)
+           (fixture/write! port-file " 41234\n")
+           (press! ui \p)
+           (is (str/includes? (frame ui) "41234"))
+           (press! ui KeyType/Backspace)
+           (press! ui \5)
+           (press! ui KeyType/Escape)
+           (press! ui \p)
+           (is (str/includes? (frame ui) "41235"))))))))
+
 (defn- editor-argv [^Path root draft exit-code]
   (let [script (.resolve root "editor fixture.clj")
         replacement (.resolve root "replacement.txt")

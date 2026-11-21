@@ -1,8 +1,8 @@
 # Clojure System Browser
 
 A Smalltalk-inspired browser for Clojure definitions. Regular project source files
-remain the persistent source of truth. This implementation works exclusively with
-**Source World**, without starting or connecting to a REPL.
+remain the persistent source of truth. **Source World** works independently of
+the optional nREPL panel in Desktop and TUI.
 
 ## ⚠️ Disclaimer
 
@@ -32,9 +32,9 @@ The main goal was to validate an idea and get a working MVP as fast as possible.
   button in Desktop, `o` in the TUI) shows the real file order of top-level
   forms of the current namespace, marking the selected definition. Shared
   through the same service; see [ADR 008](docs/decisions/008-source-order-view.md).
-- Latest recorded results (2026-11-21): **65 tests, 648 assertions and 40 process
-  checks**, with no failures; lint reports no warnings. Core tests use JDK 27 and
-  21; client tests use JDK 27. See [verification](docs/verification.md).
+- Desktop and TUI can connect to an existing local nREPL, interact through a
+  multiline panel and evaluate the selected definition separately from Save.
+  See [REPL walkthrough](#repl-walkthrough) and [verification](docs/verification.md).
 - The MVP **is not considered complete** until the full interaction workflow has
   been demonstrated in both clients on supported systems.
   Next design decision: [forward-reference diagnostics](docs/definition-order.md)
@@ -75,6 +75,7 @@ if the JDK is too old. An `UnsupportedClassVersionError` mentioning class versio
 | JavaFX | 27.0.1 | Desktop only |
 | RichTextFX | 0.11.7 | Code editor, Desktop only |
 | Lanterna | 3.1.5 | TUI only |
+| nREPL | 1.7.0 | Desktop, TUI and Live integration tests |
 
 Initial dependency resolution requires Maven Central and Clojars access.
 `-Srepro` avoids inheriting dependencies from personal Clojure CLI configuration.
@@ -251,6 +252,36 @@ reaches the application, use `s` to save. Running inside Emacs requires a termin
 that supports full-screen applications; a process output buffer does not
 demonstrate that compatibility.
 
+## REPL walkthrough
+
+Start a trusted Clojure/JVM nREPL in the project you want to work with. For the
+sample project, run this in `examples/sample-project`. The server prints its
+port and writes it to `.nrepl-port`.
+
+```sh
+clojure -Srepro -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.7.0"}}}' -M -m nrepl.cmdline --bind 127.0.0.1
+```
+
+1. Open the same project in CSB. Select **REPL** in Desktop or press `p` in
+   the TUI. The panel fills the port from `.nrepl-port` in the root of the
+   open project. You can edit the port or enter it manually if the file is
+   missing or invalid. Click **Connect** in Desktop or press Enter in the TUI.
+2. Type an expression such as `(+ 20 22)` and select **Evaluate** or press
+   F5 in the TUI. Enter inserts a newline in the TUI expression field.
+   The transcript labels the value, standard output and standard error.
+3. Evaluate `(require 'shop.orders)` in the panel to load the sample namespace.
+   Select a definition in Source World and choose **Evaluate definition** or
+   press F6 in the TUI. This sends the visible definition, including any draft,
+   in its already loaded namespace. **Save** is the separate disk operation.
+4. Use **Interrupt** or F7 to request cancellation. Use **Disconnect** or F8
+   to close the session. Esc returns to source in the TUI, where `p` reopens
+   the panel. PgUp/PgDn scroll its transcript.
+
+The endpoint is fixed to `127.0.0.1`. Evaluation runs with the privileges of
+the connected JVM. The panel allows one evaluation at a time and requests
+interruption after 60 seconds. Side effects that already happened persist.
+Programs that request stdin show a message and can be interrupted.
+
 ## Headless API
 
 ```clojure
@@ -351,13 +382,15 @@ Java binary.
   counted) and describes the parse structurally: it does not resolve references,
   expand macros or prove that the file loads. Files with parse errors appear
   only in diagnostics.
-- nREPL, evaluation, Live/Combined World and a Test Runner are not implemented.
+- The local REPL panel is the first part of Live World. Runtime namespace and
+  var browsing, the Combined view and the Test Runner remain on the roadmap.
 
 ## Verification
 
 ```sh
 clojure -Srepro -M:test
-clj-kondo --lint src apps test test-desktop test-tui test-support deps.edn build.clj
+clj-kondo --lint src apps test test-live test-desktop test-tui test-support deps.edn build.clj
+clojure -Srepro -M:live-test
 clojure -Srepro -M:tui:tui-test
 JAVA_CMD=/usr/lib/jvm/java-27-openjdk/bin/java clojure -Srepro -M:desktop:desktop-test
 ```

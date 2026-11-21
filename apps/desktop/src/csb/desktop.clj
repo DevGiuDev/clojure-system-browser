@@ -4,9 +4,12 @@
             [clojure.string :as str]
             [csb.cli :as cli]
             [csb.desktop.code-editor :as code-editor]
+            [csb.repl :as repl]
             [csb.service :as service]
             [csb.session :as session])
   (:import [javafx.application Platform]
+           [javafx.beans.value ChangeListener]
+           [javafx.scene.control TextArea]
            [javafx.scene.input KeyCode KeyEvent]
            [javafx.stage DirectoryChooser WindowEvent]
            [java.util.concurrent Executors ExecutorService]))
@@ -59,6 +62,47 @@
               :disable (boolean (or busy? dirty?))
               :items (mapv #(order-label % definition) entries)}}]}))
 
+(defn- follow-transcript! [^TextArea area]
+  (let [scroll! #(Platform/runLater
+                  (fn []
+                    (.positionCaret area (.getLength area))
+                    (.setScrollTop area Double/MAX_VALUE)))]
+    (.addListener (.textProperty area)
+                  (reify ChangeListener
+                    (changed [_ _ _ _] (scroll!))))
+    (scroll!)))
+
+(defn- repl-panel [state actions]
+  (let [{:keys [phase port input active interrupt? namespace status] :as panel} (:repl state)
+        disconnected? (contains? #{nil :disconnected} phase)
+        connected? (= :connected phase)
+        pending? (or (not connected?) active)
+        output (repl/transcript panel)]
+    {:fx/type :v-box :spacing 6 :padding 14
+     :children
+     [{:fx/type :h-box :spacing 8 :alignment :center-left
+       :children
+       [{:fx/type :label :text "nREPL · 127.0.0.1"}
+        {:fx/type :text-field :id "repl-port" :pref-column-count 5 :prompt-text "Port"
+         :disable (not disconnected?) :text (or port "") :on-text-changed (:repl-port actions)
+         :on-action (fn [_] ((:repl-connect actions)))}
+        (button "Connect" (:repl-connect actions) (or (not disconnected?) (:busy? state)))
+        (button "Disconnect" (:repl-disconnect actions) (or disconnected? (= :disconnecting phase)))
+        {:fx/type :label :id "repl-status" :text (str (when namespace (str namespace " · "))
+                                                      (or status "Disconnected"))
+         :wrap-text true}]}
+      {:fx/type fx/ext-on-instance-lifecycle :on-created follow-transcript! :v-box/vgrow :always
+       :desc {:fx/type :text-area :id "repl-output" :editable false :wrap-text true
+              :pref-row-count 4 :text output :style "-fx-font-family: monospace;"}}
+      {:fx/type :text-area :id "repl-input" :pref-row-count 2 :prompt-text "Clojure expression"
+       :text (or input "") :on-text-changed (:repl-input actions) :style "-fx-font-family: monospace;"}
+      {:fx/type :h-box :spacing 8
+       :children [(button "Evaluate" (:repl-evaluate actions) (or pending? (str/blank? input)))
+                  (button "Evaluate definition" (:repl-definition actions)
+                          (or pending? (:busy? state) (not (repl/jvm-definition? state))))
+                  (button "Interrupt" (:repl-interrupt actions)
+                          (or (not interrupt?) (nil? active) (:stop active)))]}]}))
+
 (defn- view [state actions]
   (let [{:keys [definition draft dirty? system busy?]} state
         defs (filterv #(str/includes? (str/lower-case (str (:name %)))
@@ -89,14 +133,17 @@
                                 (button "Discard" (:discard actions) (or busy? (not dirty?)))
                                 (button "Reload" (:reload actions) (or busy? (nil? system)))
                                 (button "Source order" (:toggle-order actions) (or busy? (nil? system)))
+                                (button "REPL" (:toggle-repl actions) busy?)
                                 {:fx/type :text-field :id "definition-filter" :prompt-text "Filter definitions…"
                                  :text (get state :filter "") :h-box/hgrow :always
                                  :on-text-changed (:filter actions)}]
                                (map (fn [c] (button (:title c) #((:extension actions) (:kind c) (:id c)) busy?)) extensions))}]}
        :center
-       {:fx/type :split-pane :orientation :vertical :divider-positions [0.34]
+       {:fx/type :split-pane :orientation :vertical
+        :divider-positions (if (:repl-open? state) [0.25 0.54] [0.34])
         :items
-        [{:fx/type :h-box :padding 14 :spacing 12
+        (cond->
+         [{:fx/type :h-box :padding 14 :spacing 12
           :children
           [(selection-list "namespaces" "Namespaces" (vec (session/namespaces state)) (:namespace state)
                            str (:namespace actions) (or busy? dirty?))
@@ -133,7 +180,8 @@
               :editable (and (not busy?) (boolean (:writable? definition)))
               :on-text-changed (:edit actions)}
              {:fx/type :label :wrap-text true
-              :text (or (:read-only-reason definition) "Save changes the source file. No code is evaluated.")}]})]}
+              :text (or (:read-only-reason definition) "Save changes the source file. No code is evaluated.")}]})]
+          (:repl-open? state) (conj (repl-panel state actions)))}
        :bottom
        {:fx/type :v-box :padding 12 :spacing 4
         :children
@@ -149,7 +197,9 @@
 
 (defn- controller [state options]
   (let [worker (Executors/newSingleThreadExecutor)
-        stop! #(.shutdownNow ^ExecutorService worker)
+        stop! (fn []
+                (repl/disconnect! state)
+                (.shutdownNow ^ExecutorService worker))
         submit (fn [f]
                  (when-not (:busy? @state)
                    (swap! state assoc :busy? true)
@@ -164,7 +214,12 @@
               (if (:dirty? @state)
                 (swap! state assoc :status "Unsaved changes: Save or Discard before opening a project")
                 (when-let [root (choose-project)]
-                  (submit #(session/open! state root (dissoc options :roots :project))))))
+                  (submit (fn []
+                            (let [previous (:system @state)]
+                              (session/open! state root (dissoc options :roots :project))
+                              (when-not (identical? previous (:system @state))
+                                (repl/disconnect! state)
+                                (swap! state dissoc :repl-open?))))))))
       :save #(submit (fn [] (session/save! state)))
       :discard #(session/discard! state)
       :reload #(submit (fn [] (session/reload! state)))
@@ -174,6 +229,16 @@
       :edit #(session/edit! state %)
       :filter #(swap! state assoc :filter %)
       :toggle-order #(swap! state update :source-order? not)
+      :toggle-repl #(if (:repl-open? @state)
+                      (swap! state assoc :repl-open? false)
+                      (repl/show-panel! state))
+      :repl-port #(swap! state update :repl repl/edit-port %)
+      :repl-input #(swap! state assoc-in [:repl :input] %)
+      :repl-connect #(when-not (:busy? @state) (repl/connect! state))
+      :repl-disconnect #(repl/disconnect! state)
+      :repl-evaluate #(repl/evaluate-input! state)
+      :repl-definition #(repl/evaluate-definition! state)
+      :repl-interrupt #(repl/interrupt! state)
       :extension (fn [kind id] (submit #(session/extension! state kind id)))
       :close (fn [^WindowEvent e]
                (if (:dirty? @state)

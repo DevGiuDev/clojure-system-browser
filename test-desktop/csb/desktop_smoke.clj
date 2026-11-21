@@ -9,7 +9,7 @@
   (:import [java.nio.file Files]
            [javafx.application Platform]
            [javafx.event Event]
-           [javafx.scene.control Button Label ListView TextField]
+           [javafx.scene.control Button Label ListView TextArea TextField]
            [javafx.scene.input KeyCode KeyEvent]
            [javafx.scene.paint Color]
            [javafx.scene.text Text]
@@ -90,6 +90,59 @@
   (select! ui "#namespaces" "shop.orders")
   (select! ui "#categories" "functions")
   (select! ui "#definitions" "total ·"))
+
+(deftest repl-panel-preserves-the-source-draft-and-validates-the-port
+  (fixture/with-example
+   (fn [root]
+     (with-window
+       (fn [{:keys [state] :as ui}]
+         (open! ui root)
+         (total! ui)
+         (edit! ui fixture/total-draft)
+         (fire! ui "REPL")
+         (let [stage (sync! ui)]
+           (fx! (fn []
+                  (.setText ^TextField (node stage "#repl-port") "65536")
+                  (.setText ^TextArea (node stage "#repl-input") "(+ 1\n 2)"))))
+         (fire! ui "Connect")
+         (let [stage (sync! ui)]
+           (is (str/includes? (fx! #(.getText ^Label (node stage "#repl-status"))) "port")))
+         (fire! ui "REPL")
+         (is (= fixture/total-draft (source ui)))
+         (is (:dirty? @state))
+         (fire! ui "REPL")
+         (let [stage (sync! ui)]
+           (is (= "(+ 1\n 2)" (fx! #(.getText ^TextArea (node stage "#repl-input")))))))))))
+
+(deftest repl-port-default-follows-the-open-project
+  (fixture/with-example
+   (fn [root]
+     (let [port-file (.resolve root ".nrepl-port")
+           other (.resolve root "other-project")]
+       (fixture/write! port-file " 41234\r\n")
+       (fixture/write! (.resolve other "deps.edn") "{:paths [\"src\"]}")
+       (fixture/write! (.resolve other ".nrepl-port") "42345\n")
+       (with-window
+         (fn [ui]
+           (let [port (fn []
+                        (let [stage (sync! ui)]
+                          (fx! #(.getText ^TextField (node stage "#repl-port")))))]
+             (open! ui root)
+             (fire! ui "REPL")
+             (is (= "41234" (port)))
+             (fire! ui "REPL")
+             (fixture/write! port-file "41235\n")
+             (fire! ui "REPL")
+             (is (= "41235" (port)))
+             (let [stage (sync! ui)]
+               (fx! #(.setText ^TextField (node stage "#repl-port") "45678")))
+             (fire! ui "REPL")
+             (fire! ui "REPL")
+             (is (= "45678" (port)))
+             (with-redefs-fn {#'desktop/choose-project (constantly (str other))}
+               #(fire! ui "Open project…"))
+             (fire! ui "REPL")
+             (is (= "42345" (port))))))))))
 
 (deftest initial-window-and-example-navigation
   (fixture/with-example
