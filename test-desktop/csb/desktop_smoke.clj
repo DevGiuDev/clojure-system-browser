@@ -5,7 +5,8 @@
             [csb.desktop :as desktop]
             [csb.session :as session]
             [csb.source :as source]
-            [csb.ui-fixture :as fixture])
+            [csb.ui-fixture :as fixture]
+            [nrepl.server :as server])
   (:import [java.nio.file Files]
            [javafx.application Platform]
            [javafx.event Event]
@@ -113,6 +114,34 @@
          (fire! ui "REPL")
          (let [stage (sync! ui)]
            (is (= "(+ 1\n 2)" (fx! #(.getText ^TextArea (node stage "#repl-input")))))))))))
+
+(deftest runtime-inspector-navigates-vars-and-retains-source-drafts
+  (with-open [running (server/start-server :bind "127.0.0.1" :port 0)]
+    (fixture/with-example
+     (fn [root]
+       (with-window
+         (fn [{:keys [state] :as ui}]
+           (fixture/write! (.resolve root ".nrepl-port") (str (:port running)))
+           (open! ui root)
+           (total! ui)
+           (edit! ui fixture/total-draft)
+           (fire! ui "REPL")
+           (fire! ui "Connect")
+           (fixture/await-state! state #(= :connected (get-in % [:repl :phase])))
+           (fire! ui "Inspect runtime")
+           (fixture/await-state! state #(get-in % [:repl :inspection :observation]))
+           (select! ui "#runtime-entries" "clojure.string")
+           (fire! ui "Open")
+           (fixture/await-state! state #(get-in % [:repl :inspection :observation]))
+           (select! ui "#runtime-entries" "upper-case")
+           (fire! ui "Open")
+           (fixture/await-state! state #(get-in % [:repl :inspection :observation]))
+           (let [stage (sync! ui)]
+             (is (str/includes? (fx! #(.getText ^TextArea (node stage "#runtime-metadata")))
+                                "clojure.string/upper-case")))
+           (fire! ui "Console")
+           (is (= fixture/total-draft (source ui)))
+           (is (:dirty? @state))))))))
 
 (deftest repl-port-default-follows-the-open-project
   (fixture/with-example

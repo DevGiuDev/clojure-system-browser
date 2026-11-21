@@ -5,6 +5,7 @@
             [csb.cli :as cli]
             [csb.desktop.code-editor :as code-editor]
             [csb.repl :as repl]
+            [csb.runtime-inspection :as inspection]
             [csb.service :as service]
             [csb.session :as session])
   (:import [javafx.application Platform]
@@ -14,16 +15,18 @@
            [javafx.stage DirectoryChooser WindowEvent]
            [java.util.concurrent Executors ExecutorService]))
 
+(defn- selectable-items [id values selected label on-change disabled?]
+  {:fx/type list-view/with-selection-props :v-box/vgrow :always
+   :props {:selected-index (.indexOf ^java.util.List (vec values) selected)
+           :on-selected-index-changed
+           (fn [i] (when (and (<= 0 i) (< i (count values))) (on-change (nth values i))))}
+   :desc {:fx/type :list-view :id id :disable (boolean disabled?)
+          :items (mapv label values)}})
+
 (defn- selection-list [id title values selected label on-change disabled?]
   {:fx/type :v-box :spacing 6 :h-box/hgrow :always :pref-width 280
-   :children
-   [{:fx/type :label :text title :style "-fx-font-weight: bold;"}
-    {:fx/type list-view/with-selection-props :v-box/vgrow :always
-     :props {:selected-index (.indexOf ^java.util.List (vec values) selected)
-             :on-selected-index-changed
-             (fn [i] (when (and (<= 0 i) (< i (count values))) (on-change (nth values i))))}
-     :desc {:fx/type :list-view :id id :disable (boolean disabled?)
-            :items (mapv label values)}}]})
+   :children [{:fx/type :label :text title :style "-fx-font-weight: bold;"}
+              (selectable-items id values selected label on-change disabled?)]})
 
 (defn- button [text action disabled?]
   {:fx/type :button :text text :disable (boolean disabled?) :on-action (fn [_] (action))})
@@ -72,36 +75,69 @@
                     (changed [_ _ _ _] (scroll!))))
     (scroll!)))
 
+(defn- inspection-panel [state actions]
+  (let [{:keys [phase active inspection interrupt?]} (:repl state)
+        {:keys [target perspective]} inspection
+        rows (repl/inspection-rows state)
+        pending? (or (not= :connected phase) active)]
+    {:fx/type :v-box :spacing 6 :v-box/vgrow :always
+     :children
+     [{:fx/type :h-box :spacing 8
+       :children [(button "Live" #((:perspective actions) :live) (not= :combined perspective))
+                  (button "Combined" #((:perspective actions) :combined) (= :combined perspective))
+                  (button "Refresh" (:refresh-inspection actions) pending?)
+                  (button "Back" (:back-inspection actions) (or pending? (empty? target)))
+                  (button "Open" (:open-inspection actions) (or pending? (empty? rows)))
+                  (button "Interrupt" (:repl-interrupt actions)
+                          (or (not interrupt?) (nil? active) (:stop active)))]}
+      {:fx/type :label :id "runtime-status" :text (inspection/status (:repl state)) :wrap-text true}
+      {:fx/type :label :text (inspection/heading inspection) :style "-fx-font-weight: bold;"}
+      (if-let [details (inspection/details state)]
+        {:fx/type :text-area :id "runtime-metadata" :text details :editable false
+         :wrap-text true :v-box/vgrow :always}
+        (selectable-items "runtime-entries" rows (repl/inspection-selection state rows)
+                          inspection/label #((:select-inspection actions) (:name %)) pending?))]}))
+
 (defn- repl-panel [state actions]
-  (let [{:keys [phase port input active interrupt? namespace status] :as panel} (:repl state)
+  (let [{:keys [phase host port input active interrupt? namespace status] :as panel} (:repl state)
         disconnected? (contains? #{nil :disconnected} phase)
         connected? (= :connected phase)
         pending? (or (not connected?) active)
-        output (repl/transcript panel)]
+        inspector? (:inspection-open? state)]
     {:fx/type :v-box :spacing 6 :padding 14
      :children
-     [{:fx/type :h-box :spacing 8 :alignment :center-left
+     (into
+      [{:fx/type :h-box :spacing 8 :alignment :center-left
        :children
-       [{:fx/type :label :text "nREPL · 127.0.0.1"}
+       [{:fx/type :label :text "nREPL"}
+        {:fx/type :text-field :id "repl-host" :pref-column-count 9 :prompt-text "Host"
+         :disable (not disconnected?) :text (or host repl/default-host)
+         :on-text-changed (:repl-host actions)
+         :on-action (fn [_] ((:repl-connect actions)))}
         {:fx/type :text-field :id "repl-port" :pref-column-count 5 :prompt-text "Port"
          :disable (not disconnected?) :text (or port "") :on-text-changed (:repl-port actions)
          :on-action (fn [_] ((:repl-connect actions)))}
         (button "Connect" (:repl-connect actions) (or (not disconnected?) (:busy? state)))
         (button "Disconnect" (:repl-disconnect actions) (or disconnected? (= :disconnecting phase)))
+        (if inspector?
+          (button "Console" (:hide-inspection actions) false)
+          (button "Inspect runtime" (:show-inspection actions) pending?))
         {:fx/type :label :id "repl-status" :text (str (when namespace (str namespace " · "))
                                                       (or status "Disconnected"))
-         :wrap-text true}]}
-      {:fx/type fx/ext-on-instance-lifecycle :on-created follow-transcript! :v-box/vgrow :always
-       :desc {:fx/type :text-area :id "repl-output" :editable false :wrap-text true
-              :pref-row-count 4 :text output :style "-fx-font-family: monospace;"}}
-      {:fx/type :text-area :id "repl-input" :pref-row-count 2 :prompt-text "Clojure expression"
-       :text (or input "") :on-text-changed (:repl-input actions) :style "-fx-font-family: monospace;"}
-      {:fx/type :h-box :spacing 8
-       :children [(button "Evaluate" (:repl-evaluate actions) (or pending? (str/blank? input)))
-                  (button "Evaluate definition" (:repl-definition actions)
-                          (or pending? (:busy? state) (not (repl/jvm-definition? state))))
-                  (button "Interrupt" (:repl-interrupt actions)
-                          (or (not interrupt?) (nil? active) (:stop active)))]}]}))
+         :wrap-text true}]}]
+      (if inspector?
+        [(inspection-panel state actions)]
+        [{:fx/type fx/ext-on-instance-lifecycle :on-created follow-transcript! :v-box/vgrow :always
+          :desc {:fx/type :text-area :id "repl-output" :editable false :wrap-text true
+                 :pref-row-count 4 :text (repl/transcript panel) :style "-fx-font-family: monospace;"}}
+         {:fx/type :text-area :id "repl-input" :pref-row-count 2 :prompt-text "Clojure expression"
+          :text (or input "") :on-text-changed (:repl-input actions) :style "-fx-font-family: monospace;"}
+         {:fx/type :h-box :spacing 8
+          :children [(button "Evaluate" (:repl-evaluate actions) (or pending? (str/blank? input)))
+                     (button "Evaluate definition" (:repl-definition actions)
+                             (or pending? (:busy? state) (not (repl/jvm-definition? state))))
+                     (button "Interrupt" (:repl-interrupt actions)
+                             (or (not interrupt?) (nil? active) (:stop active)))]}]))}))
 
 (defn- view [state actions]
   (let [{:keys [definition draft dirty? system busy?]} state
@@ -219,7 +255,7 @@
                               (session/open! state root (dissoc options :roots :project))
                               (when-not (identical? previous (:system @state))
                                 (repl/disconnect! state)
-                                (swap! state dissoc :repl-open?))))))))
+                                (swap! state dissoc :repl-open? :inspection-open?))))))))
       :save #(submit (fn [] (session/save! state)))
       :discard #(session/discard! state)
       :reload #(submit (fn [] (session/reload! state)))
@@ -233,12 +269,20 @@
                       (swap! state assoc :repl-open? false)
                       (repl/show-panel! state))
       :repl-port #(swap! state update :repl repl/edit-port %)
+      :repl-host #(swap! state assoc-in [:repl :host] %)
       :repl-input #(swap! state assoc-in [:repl :input] %)
       :repl-connect #(when-not (:busy? @state) (repl/connect! state))
       :repl-disconnect #(repl/disconnect! state)
       :repl-evaluate #(repl/evaluate-input! state)
       :repl-definition #(repl/evaluate-definition! state)
       :repl-interrupt #(repl/interrupt! state)
+      :show-inspection #(repl/show-inspection! state)
+      :hide-inspection #(repl/hide-inspection! state)
+      :perspective #(repl/set-perspective! state %)
+      :select-inspection #(repl/select-inspection! state %)
+      :open-inspection #(repl/open-inspection! state)
+      :back-inspection #(repl/back-inspection! state)
+      :refresh-inspection #(repl/refresh-inspection! state)
       :extension (fn [kind id] (submit #(session/extension! state kind id)))
       :close (fn [^WindowEvent e]
                (if (:dirty? @state)

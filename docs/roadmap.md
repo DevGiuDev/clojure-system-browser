@@ -1,15 +1,17 @@
 # Roadmap
 
-## Live World panel — 2026-11-21
+## Live World — 2026-11-21
 
 The first slice of milestone 5 adds the local nREPL panel to Desktop and TUI.
 Both offer explicit connection to a running JVM, a multiline console, evaluation
 of the selected definition, a transcript, interruption and disconnection. The
 clients share the runtime adapter. See [ADR 013](decisions/013-local-repl-panel.md).
 
-The remaining milestone 5 work covers runtime namespace and var exploration,
-metadata and conservative Live/Combined views. The Test Runner follows in
-milestone 6. The Source World manual acceptance matrix remains tracked separately.
+Milestone 5 now also covers configurable hosts, runtime namespace and var
+exploration, basic metadata, and conservative Live and Combined views in both
+clients. See [ADR 014](decisions/014-runtime-inspection.md) and
+[verification](verification.md). The Test Runner follows in milestone 6.
+The Source World manual acceptance matrix remains tracked separately.
 
 ## Recorded progress — 2026-11-21
 
@@ -77,10 +79,10 @@ checks** and clean lint. See [verification](verification.md) and
 | 2: Desktop | Four panels, syntax highlighting, filter, draft, Save/Discard/Reload; controls, colors, selection, undo, shortcut, conflicts and errors tested headless with JDK 27 | Full visual demonstration and manual interaction |
 | 3: TUI | Dark/light themes with `t`, lexical highlighting shared with Desktop, contrast and change-driven refresh; virtual terminal and 40 checks with pseudoterminal/real Vim; Save/Ctrl+S, conflicts, permissions and terminal restoration | Full manual interaction, highlighting inside Emacs/EXWM and per-platform behavior |
 | 4: polish/extension | Registry v1, command, view and documentation | Validation of both clients and system matrix |
-| 5: Live World | Local nREPL panel and explicit evaluation | Runtime inspection and Live/Combined views |
-| 6: Test Runner | Not implemented | After validating nREPL |
+| 5: Live World | nREPL connection, evaluation, runtime inspection and Live/Combined views | Manual verification on supported platforms |
+| 6: Test Runner | Not implemented | Next feature |
 
-## Next verifiable step
+## Source World acceptance record
 
 User confirmation (2026-11-21): Desktop saving works and the TUI workflow with
 `emacsclient` in their Emacs/EXWM session works too — editing in a buffer of
@@ -91,7 +93,7 @@ Emacs/frame).
 The core and automated interaction suites of Desktop/TUI pass with the pinned
 versions. Owner decision (2026-11-21): the smoke test is considered validated
 and work continues with the next feature; the full acceptance matrix remains
-recorded as not manually demonstrated. The chosen feature is
+recorded as not manually demonstrated. The feature chosen at that point was
 [definition order](definition-order.md). A Git remote (`origin`) exists since
 2026-11-21. The GitHub Actions workflow ran once on the initial push:
 headless Desktop passed; the macOS core job exposed two macOS-only

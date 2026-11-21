@@ -29,3 +29,14 @@
             (Files/deleteIfExists ^Path file)))))))
 
 (def total-draft "(defn total [lines]\n  (+ 10 (reduce + 0 (map :amount lines))))")
+
+(defn await-state! [state predicate]
+  (let [ready (promise)
+        key (Object.)
+        check #(when (predicate %) (deliver ready true))]
+    (add-watch state key (fn [_ _ _ value] (check value)))
+    (try
+      (check @state)
+      (when-not (deref ready 6000 false)
+        (throw (ex-info "Timed out waiting for client state" {})))
+      (finally (remove-watch state key)))))

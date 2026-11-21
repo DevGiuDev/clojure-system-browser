@@ -8,10 +8,10 @@ were executed from prepared verifications.
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
 | Core, external editor, lexical classifier, source order, facets and Polylith discovery | 48 | 371 | No failures or errors; JDK 27 and 21 |
-| Desktop with headless JavaFX controls | 10 | 98 | No failures or errors; JDK 27 |
-| TUI with virtual terminal | 16 | 213 | No failures or errors; JDK 27 |
-| Local nREPL integration | 5 | 24 | No failures or errors; JDK 27 |
-| Suite total | **79** | **706** | No failures or errors |
+| Desktop with headless JavaFX controls | 11 | 101 | No failures or errors; JDK 27 |
+| TUI with virtual terminal | 17 | 217 | No failures or errors; JDK 27 |
+| nREPL integration | 7 | 38 | No failures or errors; JDK 27 |
+| Suite total | **83** | **727** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | **40 checks**, no failures |
 | clj-kondo | — | — | 0 errors, 0 warnings |
 
@@ -35,6 +35,27 @@ clean.
 order view, read-only) with automated verification in all three suites.
 Forward-reference diagnostics, load validation and write operations with
 placement remain unimplemented.
+
+## Live and Combined inspection (2026-11-21)
+
+- The integration suite started a separate nREPL JVM and connected using the
+  configured hostname. It checked namespace and private var discovery, metadata,
+  missing vars, all four Combined presence states across the suite, and
+  preservation of the console namespace and transcript. A server that rejects
+  inspection reports the denial and continues to accept console evaluation.
+- Desktop exercised inspector controls with the headless backend and repeated
+  the suite against JavaFX GTK under Xvfb. Both runs checked navigation to var
+  metadata and preservation of an unsaved Source World draft.
+- The virtual TUI used the production key handling to open Live, switch to
+  Combined, navigate and return to the source draft. The Source World PTY/Vim
+  check also passed all 40 checks again.
+- The TUI uberjar rebuilt successfully with JDK 21. In a POSIX pseudoterminal
+  it connected to a separate JVM, paged through namespaces, opened private
+  var metadata, showed Combined presence and reported a dropped connection.
+  It exited normally and the project file stayed byte-for-byte intact.
+- All four suites ran on JDK 27, and clj-kondo reported zero warnings and errors.
+- Manual verification in Emacs/EXWM and the cross-platform acceptance matrix
+  remain pending.
 
 ## Local nREPL panel (2026-11-21)
 

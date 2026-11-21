@@ -2,15 +2,17 @@
   "Shared nREPL commands and panel state for Desktop and TUI."
   (:require [clojure.string :as str]
             [csb.model :as model]
+            [csb.runtime-inspection :as inspection]
             [csb.service :as service]
             [nrepl.transport :as transport])
   (:import [java.io Closeable IOException]
            [java.net InetSocketAddress Socket]
            [java.nio.charset StandardCharsets]
            [java.nio.file Files LinkOption OpenOption Path]
-           [java.util UUID]))
+           [java.util UUID]
+           [java.util.concurrent Callable FutureTask TimeUnit TimeoutException]))
 
-(def ^:private host "127.0.0.1")
+(def default-host "127.0.0.1")
 (def ^:private max-code 16384)
 (def ^:private max-entries 200)
 (def ^:private max-entry 4096)
@@ -18,6 +20,7 @@
 (defn- identifier [] (str (UUID/randomUUID)))
 (defn- deadline [ms] (+ (System/nanoTime) (* 1000000 ms)))
 (defn- expired? [until] (and until (>= (System/nanoTime) until)))
+(defn- remaining-ms [until] (quot (- until (System/nanoTime)) 1000000))
 (defn- statuses [response]
   (into #{} (map #(if (keyword? %) (subs (str %) 1) %)) (:status response)))
 
@@ -48,7 +51,7 @@
   (let [id (identifier)]
     (transport/send wire (assoc request :id id))
     (loop [data {}]
-      (let [remaining (quot (- until (System/nanoTime)) 1000000)]
+      (let [remaining (remaining-ms until)]
         (when-not (pos? remaining)
           (model/fail! :timeout "nREPL handshake timed out" {}))
         (if-let [response (transport/recv wire remaining)]
@@ -85,12 +88,52 @@
                                      :else "Evaluation finished")))
       panel)))
 
-(defn- stop-evaluation! [state connection reason]
+(defn- inspection-ended [panel error observation]
+  (-> panel
+      (assoc :active nil)
+      (update :inspection assoc :error error :observation observation)))
+
+(defn- stopped [panel reason]
+  (if (get-in panel [:active :inspection-target])
+    (inspection-ended panel
+                      (:error (model/error reason (if (= :timeout reason)
+                                                    "Runtime inspection timed out"
+                                                    "Runtime inspection interrupted")))
+                      nil)
+    (assoc panel :active nil :status (if (= :timeout reason)
+                                      "Evaluation timed out"
+                                      "Evaluation interrupted"))))
+
+(defn- inspection-response [panel response]
+  (let [{:keys [id inspection-target stop inspection-error observation]} (:active panel)
+        status (statuses response)]
+    (if (not= id (:id response))
+      panel
+      (let [value (:value response)
+            error (or inspection-error (inspection/failure status))
+            parsed (when (and value (not error))
+                     (try
+                       (model/ok (inspection/read-observation inspection-target value))
+                       (catch Exception _
+                         (model/error :protocol "Invalid runtime inspection response"))))
+            error (or error (:error parsed))
+            observation (or (:value parsed) observation)]
+        (if (status "done")
+          (if (or stop (status "interrupted"))
+            (stopped panel (or stop :interrupt))
+            (inspection-ended panel
+                              (or error (when (nil? observation)
+                                          (:error (model/error :protocol "Runtime inspection returned no data"))))
+                              (when-not error observation)))
+          (update panel :active assoc :inspection-error error :observation observation))))))
+
+(defn- stop-request! [state connection reason]
   (change! state connection #(-> %
                                  (assoc-in [:active :stop] reason)
-                                 (assoc :status (if (= :timeout reason)
-                                                  "Evaluation timed out; interrupting…"
-                                                  "Interrupting…"))))
+                                 (cond-> (nil? (get-in % [:active :inspection-target]))
+                                   (assoc :status (if (= :timeout reason)
+                                                    "Evaluation timed out; interrupting…"
+                                                    "Interrupting…")))))
   {:until (deadline 1500) :retry-at (System/nanoTime)})
 
 (defn- interrupt-if-due! [wire session id interrupt]
@@ -100,65 +143,92 @@
       (assoc interrupt :request-id request-id :retry-at nil))
     interrupt))
 
-(defn- run-session! [state connection wire session interrupt?]
+(defn- run-session! [state connection wire console-session inspection-session interrupt?]
   (loop [sent nil interrupt nil]
     (let [{:keys [phase active]} (:repl @state)
-          {:keys [id code ns due stop]} active
+          {:keys [id code ns due stop inspection-target]} active
+          session (if inspection-target inspection-session console-session)
           new? (and id (not= sent id))
           reason (or stop (when (expired? due) :timeout))]
       (when (= :connected phase)
         (if (and new? reason)
           (do
-            (change! state connection #(assoc % :active nil :status (if (= :timeout reason)
-                                                                      "Evaluation timed out"
-                                                                      "Evaluation interrupted")))
+            (change! state connection #(stopped % reason))
             (recur nil nil))
-          (let [interrupt (when reason (or interrupt (stop-evaluation! state connection reason)))]
+          (let [interrupt (when reason (or interrupt (stop-request! state connection reason)))]
             (when new?
               (transport/send wire (cond-> {:op "eval" :id id :session session :code code
-                                            :nrepl.middleware.print/quota 65536}
+                                            :nrepl.middleware.print/quota
+                                            (if inspection-target 262144 65536)}
                                      ns (assoc :ns ns))))
             (when (expired? (:until interrupt))
               (model/fail! reason (if (= :timeout reason)
-                                    "Evaluation timed out; connection closed"
+                                    (str (if inspection-target "Runtime inspection" "Evaluation")
+                                         " timed out; connection closed")
                                     "Interrupt did not finish; connection closed") {}))
             (let [interrupt (if interrupt? (interrupt-if-due! wire session id interrupt) interrupt)
                   response (transport/recv wire 35)
                   response-id (:id response)
                   status (statuses response)]
-              (when (and (= session (:session response)) response-id)
+              (when response-id
                 (when (and (= id response-id) (contains? status "unknown-session"))
                   (model/fail! :session-closed "nREPL session closed; reconnect to continue" {}))
-                (change! state connection #(evaluation-response % response)))
+                (cond
+                  (= console-session (:session response))
+                  (change! state connection #(evaluation-response % response))
+                  (and inspection-session (= inspection-session (:session response)))
+                  (change! state connection #(inspection-response % response))))
               (recur id (cond-> interrupt
                           (and response-id (= (:request-id interrupt) response-id)
                                (some status ["session-idle" "interrupt-id-mismatch"]))
                           (assoc :retry-at (deadline 70)))))))))))
 
-(defn- run-connection! [state connection port connect-timeout-ms]
+(defn- clone-session! [wire until]
+  (or (:new-session (exchange! wire {:op "clone"} until))
+      (model/fail! :protocol "nREPL did not return a session" {})))
+
+(defn- close-session! [wire session]
+  (when session
+    (try (exchange! wire {:op "close" :session session} (deadline 500))
+         (catch Exception _))))
+
+(defn- resolve-endpoint! [host port until]
+  (let [lookup (FutureTask. ^Callable #(InetSocketAddress. ^String host (int port)))]
+    (doto (Thread. lookup "csb-nrepl-dns") (.setDaemon true) (.start))
+    (try
+      (.get lookup (max 1 (remaining-ms until)) TimeUnit/MILLISECONDS)
+      (catch TimeoutException _
+        (model/fail! :timeout "nREPL host lookup timed out" {}))
+      (finally (.cancel lookup true)))))
+
+(defn- run-connection! [state connection host port connect-timeout-ms]
   (let [status
         (try
           (with-open [socket (Socket.)]
-            (.connect socket (InetSocketAddress. host (int port)) (int connect-timeout-ms))
+            (let [until (deadline connect-timeout-ms)
+                  endpoint (resolve-endpoint! host port until)]
+              (.connect socket endpoint (int (max 1 (remaining-ms until)))))
             (with-open [^Closeable wire (transport/bencode socket)]
               (let [until (deadline connect-timeout-ms)
                     description (exchange! wire {:op "describe"} until)
                     ops (:ops description)]
                 (when-not (every? #(contains? ops %) [:clone :close :eval])
                   (model/fail! :unsupported "This server does not offer clone, close and eval" {}))
-                (let [session (:new-session (exchange! wire {:op "clone"} until))
-                      interrupt? (contains? ops :interrupt)]
-                  (when-not session (model/fail! :protocol "nREPL did not return a session" {}))
+                (let [console-session (clone-session! wire until)]
                   (try
-                    (change! state connection
-                             #(if (= :connecting (:phase %))
-                                (assoc % :phase :connected :status "Connected" :interrupt? interrupt?
-                                       :namespace (or (get-in description [:aux :current-ns]) "user"))
-                                %))
-                    (run-session! state connection wire session interrupt?)
-                    (finally
-                      (try (exchange! wire {:op "close" :session session} (deadline 500))
-                           (catch Exception _))))))))
+                    (let [inspection-session (try (clone-session! wire until)
+                                                  (catch clojure.lang.ExceptionInfo _ nil))
+                          interrupt? (contains? ops :interrupt)]
+                      (try
+                        (change! state connection
+                                 #(if (= :connecting (:phase %))
+                                    (assoc % :phase :connected :status "Connected" :interrupt? interrupt?
+                                           :inspection? (some? inspection-session)
+                                           :namespace (or (get-in description [:aux :current-ns]) "user"))
+                                    %))
+                        (run-session! state connection wire console-session inspection-session interrupt?)
+                        (finally (close-session! wire inspection-session))))
+                    (finally (close-session! wire console-session)))))))
           "Disconnected"
           (catch Exception e
             (let [phase (get-in @state [:repl :phase])]
@@ -170,7 +240,7 @@
                 (str "Connection failed · " (ex-message e))))))]
     (change! state connection
              #(-> %
-                  (dissoc :connection :active :namespace :interrupt?)
+                  (dissoc :connection :active :namespace :interrupt? :inspection :inspection?)
                   (assoc :phase :disconnected :status status)))))
 
 (defn- parse-port [text]
@@ -193,12 +263,15 @@
 (defn show-panel! [state]
   (let [{:keys [system repl]} @state
         root (some-> system service/project-info :root)
-        detect? (or (not= root (:port-project repl))
-                    (and (nil? (:connection repl)) (not (:port-overridden? repl))))
+        changed-project? (not= root (:port-project repl))
+        detect? (or changed-project?
+                    (and (nil? (:connection repl)) (not (:port-overridden? repl))
+                         (= default-host (get repl :host default-host))))
         port (when detect? (str (read-project-port root)))]
     (swap! state (fn [s]
                    (cond-> (assoc s :repl-open? true)
-                     detect? (update :repl assoc :port-project root :port port :port-overridden? false))))))
+                     detect? (update :repl assoc :port-project root :port port :port-overridden? false)
+                     changed-project? (update :repl dissoc :host))))))
 
 (defn edit-port [panel text]
   (if (= (or (:port panel) "") text)
@@ -206,24 +279,29 @@
     (assoc panel :port text :port-overridden? true)))
 
 (defn connect!
-  "Connects asynchronously to the loopback port entered in the panel."
+  "Connects asynchronously to the endpoint entered in the panel."
   ([state] (connect! state {}))
   ([state {:keys [connect-timeout-ms eval-timeout-ms]
            :or {connect-timeout-ms 3000 eval-timeout-ms 60000}}]
    (let [connection (Object.)
          port #(parse-port (:port %))
+         address #(str/trim (get % :host default-host))
          [_ next] (swap-vals! state update :repl
                               (fn [panel]
                                 (if (contains? #{nil :disconnected} (:phase panel))
-                                  (if (port panel)
+                                  (cond
+                                    (not (port panel))
+                                    (assoc panel :phase :disconnected :status "Enter a port from 1 to 65535")
+                                    (str/blank? (address panel))
+                                    (assoc panel :phase :disconnected :status "Enter an nREPL host")
+                                    :else
                                     (assoc panel :connection connection :phase :connecting
-                                           :eval-timeout-ms eval-timeout-ms :status "Connecting…" :entries [])
-                                    (assoc panel :phase :disconnected :status "Enter a port from 1 to 65535"))
+                                           :eval-timeout-ms eval-timeout-ms :status "Connecting…" :entries []))
                                   panel)))
          panel (:repl next)]
      (when (identical? connection (:connection panel))
-       (let [number (port panel)]
-         (.start (Thread. ^Runnable #(run-connection! state connection number connect-timeout-ms)
+       (let [number (port panel) host (address panel)]
+         (.start (Thread. ^Runnable #(run-connection! state connection host number connect-timeout-ms)
                           "csb-nrepl")))))))
 
 (defn disconnect! [state]
@@ -266,3 +344,60 @@
          #(if (and (= :connected (:phase %)) (:interrupt? %) (:active %) (nil? (get-in % [:active :stop])))
             (assoc-in % [:active :stop] :interrupt)
             %)))
+
+(defn- inspect [panel target selected]
+  (if (and (= :connected (:phase panel)) (nil? (:active panel)))
+    (let [next (update panel :inspection #(assoc % :target target :selected selected
+                                                  :observation nil :error nil))]
+      (if (:inspection? panel)
+        (assoc next :active {:id (identifier) :ns "clojure.core"
+                             :code (inspection/request-code target)
+                             :due (deadline (min 6000 (:eval-timeout-ms panel)))
+                             :inspection-target target})
+        (inspection-ended next (:error (model/error :unsupported "The server did not provide an inspection session")) nil)))
+    panel))
+
+(defn show-inspection! [state]
+  (swap! state
+         (fn [{:keys [repl] :as s}]
+           (if (and (= :connected (:phase repl)) (nil? (:active repl)))
+             (cond-> (assoc s :inspection-open? true)
+               (nil? (get-in repl [:inspection :target])) (update :repl inspect [] nil))
+             s))))
+
+(defn hide-inspection! [state]
+  (swap! state dissoc :inspection-open?))
+
+(defn set-perspective! [state perspective]
+  (swap! state update :repl
+         #(if (:inspection %) (assoc-in % [:inspection :perspective] perspective) %)))
+
+(defn inspection-rows [state]
+  (vec (inspection/rows state)))
+
+(defn inspection-selection [state rows]
+  (let [saved (get-in state [:repl :inspection :selected])]
+    (or (some #(when (= saved (:name %)) %) rows) (first rows))))
+
+(defn select-inspection! [state name]
+  (swap! state assoc-in [:repl :inspection :selected] name))
+
+(defn open-inspection! [state]
+  (swap! state
+         (fn [s]
+           (let [target (get-in s [:repl :inspection :target] [])]
+             (if-let [entry (inspection-selection s (inspection-rows s))]
+               (update s :repl inspect (conj target (:name entry)) nil)
+               s)))))
+
+(defn back-inspection! [state]
+  (swap! state update :repl
+         (fn [panel]
+           (let [target (get-in panel [:inspection :target])]
+             (if (seq target) (inspect panel (pop target) (peek target)) panel)))))
+
+(defn refresh-inspection! [state]
+  (swap! state update :repl
+         (fn [panel]
+           (let [{:keys [target selected]} (:inspection panel)]
+             (inspect panel (or target []) selected)))))

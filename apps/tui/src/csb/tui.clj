@@ -90,7 +90,7 @@
 (defn- edit-repl! [state ^KeyStroke key field]
   (let [s @state
         [row column] (get-in s [:repl-caret field] [0 0])
-        [first-line & more] (str/split (get-in s [:repl field] "") #"\n" -1)
+        [first-line & more] (str/split (get-in s [:repl field] (if (= :host field) repl/default-host "")) #"\n" -1)
         widget (TextBox. ^String first-line
                          (if (= field :input) TextBox$Style/MULTI_LINE TextBox$Style/SINGLE_LINE))]
     ;; TextBox.setText drops trailing empty lines. Add them explicitly.
@@ -106,6 +106,39 @@
                                  (assoc-in s [:repl :input] text))
                                [:repl-caret field] [(.getRow caret) (.getColumn caret)]))))))
 
+(defn- inspection-move! [state size direction]
+  (let [snapshot @state
+        rows (repl/inspection-rows snapshot)
+        page (view/inspection-page-size (.getRows ^TerminalSize size))]
+    (if (seq rows)
+      (let [idx (.indexOf ^java.util.List rows (repl/inspection-selection snapshot rows))
+            next-idx (max 0 (min (dec (count rows)) (+ idx direction)))]
+        (repl/select-inspection! state (:name (nth rows next-idx))))
+      (when-let [lines (view/inspection-lines snapshot (.getColumns ^TerminalSize size))]
+        (swap! state update :inspection-scroll
+               #(max 0 (min (- (count lines) page) (+ (or % 0) direction))))))))
+
+(defn- inspection-key! [state type size]
+  (let [target (get-in @state [:repl :inspection :target])
+        perspective (get-in @state [:repl :inspection :perspective])
+        page (view/inspection-page-size (.getRows ^TerminalSize size))]
+    (condp = type
+      KeyType/F4 (repl/hide-inspection! state)
+      KeyType/F5 (repl/refresh-inspection! state)
+      KeyType/F7 (repl/interrupt! state)
+      KeyType/F8 (repl/disconnect! state)
+      KeyType/Tab (do (repl/set-perspective! state (if (= :combined perspective) :live :combined))
+                      (swap! state assoc :inspection-scroll 0))
+      KeyType/Enter (do (repl/open-inspection! state) (swap! state assoc :inspection-scroll 0))
+      KeyType/Escape (if (seq target)
+                       (do (repl/back-inspection! state) (swap! state assoc :inspection-scroll 0))
+                       (repl/hide-inspection! state))
+      KeyType/ArrowUp (inspection-move! state size -1)
+      KeyType/ArrowDown (inspection-move! state size 1)
+      KeyType/PageUp (inspection-move! state size (- page))
+      KeyType/PageDown (inspection-move! state size page)
+      nil)))
+
 (defn- repl-key! [state ^KeyStroke key ^TerminalSize size]
   (let [type (.getKeyType key)
         phase (get-in @state [:repl :phase])
@@ -113,6 +146,7 @@
         disconnected? (contains? #{nil :disconnected} phase)
         scroll-step (view/repl-page-size (.getRows size))]
     (cond
+      (:inspection-open? @state) (inspection-key! state type size)
       (= type KeyType/Escape) (swap! state assoc :repl-open? false)
       (= type KeyType/F8) (repl/disconnect! state)
       (= type KeyType/PageUp)
@@ -123,6 +157,10 @@
       (= type KeyType/PageDown) (swap! state update :repl-scroll #(max 0 (- (or % 0) scroll-step)))
       (and disconnected? (= type KeyType/Enter))
       (do (swap! state assoc :repl-scroll 0) (repl/connect! state))
+      (and disconnected? (= type KeyType/Tab))
+      (swap! state update :repl-address-field #(if (= :host %) :port :host))
+      (and connected? (= type KeyType/F4))
+      (do (swap! state assoc :inspection-scroll 0) (repl/show-inspection! state))
       (and connected? (= type KeyType/F5))
       (do (repl/evaluate-input! state)
           (when (empty? (get-in @state [:repl :input]))
@@ -131,7 +169,7 @@
       (do (repl/evaluate-definition! state) (swap! state assoc :repl-scroll 0))
       (and connected? (= type KeyType/F7)) (repl/interrupt! state)
       (and (or disconnected? connected?) (not (.isCtrlDown key)) (not (.isAltDown key)))
-      (edit-repl! state key (if connected? :input :port)))))
+      (edit-repl! state key (if connected? :input (get @state :repl-address-field :port))))))
 
 (defn- step! [^TerminalScreen screen state last-frame]
   (render-if-changed! screen @state last-frame)
@@ -162,7 +200,11 @@
           (= ch \o) (swap! state #(assoc % :source-order? (not (:source-order? %))
                                            :help? false :diagnostics? false :scroll 0))
           (= ch \p) (do (repl/show-panel! state)
-                         (swap! state #(assoc-in % [:repl-caret :port] [0 (count (get-in % [:repl :port]))])))
+                         (swap! state #(assoc % :repl-address-field :port
+                                              :repl-caret
+                                              (merge (:repl-caret %)
+                                                     {:port [0 (count (get-in % [:repl :port]))]
+                                                      :host [0 (count (get-in % [:repl :host] repl/default-host))]}))))
           (= type KeyType/Escape) (swap! state assoc :editor-error nil :help? false :diagnostics? false
                                          :source-order? false :scroll 0)
           (= ch \s) (session/save! state)

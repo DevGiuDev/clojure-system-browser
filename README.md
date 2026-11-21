@@ -32,13 +32,12 @@ The main goal was to validate an idea and get a working MVP as fast as possible.
   button in Desktop, `o` in the TUI) shows the real file order of top-level
   forms of the current namespace, marking the selected definition. Shared
   through the same service; see [ADR 008](docs/decisions/008-source-order-view.md).
-- Desktop and TUI can connect to an existing local nREPL, interact through a
-  multiline panel and evaluate the selected definition separately from Save.
+- Desktop and TUI can connect to an existing nREPL, evaluate expressions and
+  definitions separately from Save, and browse loaded namespaces, vars and metadata.
+  The Combined view compares names in the runtime and the project's source index.
   See [REPL walkthrough](#repl-walkthrough) and [verification](docs/verification.md).
 - The MVP **is not considered complete** until the full interaction workflow has
   been demonstrated in both clients on supported systems.
-  Next design decision: [forward-reference diagnostics](docs/definition-order.md)
-  (option 2; the read-only source order view is already implemented).
   See the [roadmap](docs/roadmap.md).
 
 ## Requirements and versions
@@ -265,7 +264,9 @@ clojure -Srepro -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.7.0"}}}' -M -m nrep
 1. Open the same project in CSB. Select **REPL** in Desktop or press `p` in
    the TUI. The panel fills the port from `.nrepl-port` in the root of the
    open project. You can edit the port or enter it manually if the file is
-   missing or invalid. Click **Connect** in Desktop or press Enter in the TUI.
+   missing or invalid. The host defaults to `127.0.0.1`. Use the **Host** field
+   in Desktop or press Tab to switch between host and port in the TUI.
+   Click **Connect** in Desktop or press Enter in the TUI.
 2. Type an expression such as `(+ 20 22)` and select **Evaluate** or press
    F5 in the TUI. Enter inserts a newline in the TUI expression field.
    The transcript labels the value, standard output and standard error.
@@ -273,14 +274,24 @@ clojure -Srepro -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.7.0"}}}' -M -m nrep
    Select a definition in Source World and choose **Evaluate definition** or
    press F6 in the TUI. This sends the visible definition, including any draft,
    in its already loaded namespace. **Save** is the separate disk operation.
-4. Use **Interrupt** or F7 to request cancellation. Use **Disconnect** or F8
+4. Choose **Inspect runtime** or press F4 to open **Live**, then select a
+   namespace or var and choose **Open** or press Enter. The inspector shows
+   public and private vars and their available metadata. **Combined** (Tab in
+   the TUI) also includes indexed source names. A row marked **Present in both**
+   means the name appeared in both observations. Ambiguous matches and failed
+   queries show **Unknown**. Use **Refresh** or F5 in the inspector to request a
+   fresh observation. **Back** or Esc goes up one level. **Console** or F4
+   returns to the transcript.
+5. Use **Interrupt** or F7 to request cancellation. Use **Disconnect** or F8
    to close the session. Esc returns to source in the TUI, where `p` reopens
    the panel. PgUp/PgDn scroll its transcript.
 
-The endpoint is fixed to `127.0.0.1`. Evaluation runs with the privileges of
-the connected JVM. The panel allows one evaluation at a time and requests
-interruption after 60 seconds. Side effects that already happened persist.
-Programs that request stdin show a message and can be interrupted.
+Connect only to a trusted JVM. nREPL evaluation runs with that JVM's privileges.
+Use a secure tunnel for remote access and keep the server off public interfaces.
+The clients use one active request at a time and issue inspection queries in a
+separate session. Evaluation requests interruption after 60 seconds. Side
+effects that already happened persist. Programs that request stdin show a
+message and can be interrupted.
 
 ## Headless API
 
@@ -382,8 +393,9 @@ Java binary.
   counted) and describes the parse structurally: it does not resolve references,
   expand macros or prove that the file loads. Files with parse errors appear
   only in diagnostics.
-- The local REPL panel is the first part of Live World. Runtime namespace and
-  var browsing, the Combined view and the Test Runner remain on the roadmap.
+- Live World observes the JVM on request. Combined reports presence by name
+  relative to the source index. Runtime locations and other metadata come
+  from the observed vars. The Test Runner remains on the roadmap.
 
 ## Verification
 

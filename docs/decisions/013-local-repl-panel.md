@@ -19,5 +19,5 @@ have already run.
 
 Evaluate definition sends the visible text, including any unsaved edit, for
 evaluation in the definition's loaded Clojure/JVM namespace. Save persists
-text through the source service. Runtime exploration and Combined views are
-follow-up work.
+text through the source service. [ADR 014](014-runtime-inspection.md) adds
+host configuration and runtime exploration.

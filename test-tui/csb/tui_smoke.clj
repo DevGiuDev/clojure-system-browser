@@ -4,10 +4,12 @@
             [clojure.test :as test :refer [deftest is testing]]
             [csb.cli :as cli]
             [csb.editor :as editor]
+            [csb.repl :as repl]
             [csb.session :as session]
             [csb.source :as source]
             [csb.tui :as tui]
-            [csb.ui-fixture :as fixture])
+            [csb.ui-fixture :as fixture]
+            [nrepl.server :as server])
   (:import [com.googlecode.lanterna TerminalSize TextColor TextColor$Indexed]
            [com.googlecode.lanterna.input KeyStroke KeyType]
            [com.googlecode.lanterna.screen TerminalScreen]
@@ -116,6 +118,34 @@
            (press! ui KeyType/Escape)
            (press! ui \p)
            (is (str/includes? (frame ui) "41235"))))))))
+
+(deftest runtime-inspector-has-independent-key-navigation
+  (with-open [running (server/start-server :bind "127.0.0.1" :port 0)]
+    (fixture/with-example
+     (fn [root]
+       (fixture/write! (.resolve root ".nrepl-port") (str (:port running)))
+       (with-terminal root
+         (fn [{:keys [state] :as ui}]
+           (total! ui)
+           (session/edit! state fixture/total-draft)
+           (try
+             (press! ui \p)
+             (press! ui KeyType/Enter)
+             (fixture/await-state! state #(= :connected (get-in % [:repl :phase])))
+             (press! ui KeyType/F4)
+             (is (str/includes? (frame ui) "Live · Namespaces"))
+             (when (:inspection-open? @state)
+               (fixture/await-state! state #(get-in % [:repl :inspection :observation]))
+               (press! ui KeyType/Tab)
+               (is (str/includes? (frame ui) "Combined · Namespaces"))
+               (press! ui KeyType/Enter)
+               (fixture/await-state! state #(get-in % [:repl :inspection :observation]))
+               (press! ui KeyType/ArrowDown)
+               (is (str/includes? (frame ui) "Combined · Vars"))
+               (press! ui KeyType/F4))
+             (press! ui KeyType/Escape)
+             (is (= fixture/total-draft (:draft @state)))
+             (finally (repl/disconnect! state)))))))))
 
 (defn- editor-argv [^Path root draft exit-code]
   (let [script (.resolve root "editor fixture.clj")

@@ -161,6 +161,12 @@ Definition evaluation uses the visible text and an explicit namespace for
 that request. The console keeps its session namespace. Source Save and the
 runtime run on separate paths. See [ADR 013](decisions/013-local-repl-panel.md).
 
+Live and Combined use the same worker and a separate inspection session.
+`csb.runtime-inspection` builds fixed queries, validates their observations
+and reads the Source World service for joins by name. Desktop and TUI only
+present the shared result and dispatch commands. See
+[ADR 014](decisions/014-runtime-inspection.md).
+
 ## Dependency boundaries
 
 The `:desktop` and `:tui` aliases are independent. Neither the base classpath

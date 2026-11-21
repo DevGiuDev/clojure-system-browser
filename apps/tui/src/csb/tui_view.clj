@@ -2,6 +2,7 @@
   "Terminal presentation with explicit colours, independent of the shell theme."
   (:require [clojure.string :as str]
             [csb.repl :as repl]
+            [csb.runtime-inspection :as inspection]
             [csb.service :as service]
             [csb.session :as session]
             [csb.syntax :as syntax])
@@ -211,14 +212,15 @@
     (.setCursorPosition screen (TerminalPosition. (+ x (- caret left)) (+ y (- row first-row))))))
 
 (defn- repl-panel! [^TerminalScreen screen g palette width height state]
-  (let [{:keys [phase namespace status port input] :as panel} (:repl state)
+  (let [{:keys [phase namespace status host port input] :as panel} (:repl state)
+        host (or host repl/default-host)
         connected? (= :connected phase)
         disconnected? (contains? #{nil :disconnected} phase)
         rows (repl-page-size height)
         lines (repl-lines panel width)
         start (max 0 (- (count lines) rows (get state :repl-scroll 0)))]
     (bar! g palette width 0 :accent :raised
-          (str "nREPL · 127.0.0.1" (when-not disconnected? (str ":" port))
+          (str "nREPL" (when-not disconnected? (str " · " host " / " port))
                (when namespace (str " · " namespace)) (when (:dirty? state) " · UNSAVED SOURCE")))
     (bar! g palette width 1 :text :background (or status "Disconnected"))
     (bar! g palette width 2 :muted :raised "Transcript · PgUp/PgDn")
@@ -231,15 +233,57 @@
         (bar! g palette width (- height 8) :accent :raised "Clojure expression · Enter: newline")
         (repl-input! screen g palette width 1 (- height 7) 4 input (get-in state [:repl-caret :input])))
       disconnected?
-      (do
-        (bar! g palette width (- height 7) :accent :surface "Port:")
-        (repl-input! screen g palette width 7 (- height 7) 1 port (get-in state [:repl-caret :port]))))
+      (let [focus (get state :repl-address-field :port)
+            other (if (= :host focus) :port :host)]
+        (doseq [field [other focus]
+                :let [host? (= :host field)
+                      y (- height (if host? 6 7))]]
+          (bar! g palette width y (if (= field focus) :accent :muted) :surface (if host? "Host:" "Port:"))
+          (repl-input! screen g palette width 7 y 1 (if host? host port)
+                       (get-in state [:repl-caret field])))))
     (bar! g palette width (- height 2) :text :background
           (if connected?
             "F5: evaluate · F6: evaluate definition · F7: interrupt"
-            (if disconnected? "Enter: connect" "F8: disconnect")))
+            (if disconnected? "Enter: connect · Tab: host/port" "F8: disconnect")))
     (bar! g palette width (dec height) :muted :background
-          (if connected? "Esc: source · F8: disconnect" "Esc: source"))))
+          (if connected? "Esc: source · F4: inspect runtime · F8: disconnect" "Esc: source"))))
+
+(defn inspection-page-size [height] (max 1 (- height 5)))
+
+(defn inspection-lines [state width]
+  (when-let [details (inspection/details state)]
+    (vec (TerminalTextUtils/getWordWrappedText
+          (max 1 (- width 3)) (into-array String (str/split-lines details))))))
+
+(defn- inspection-panel! [g palette width height state]
+  (let [panel (:repl state)
+        page (inspection-page-size height)
+        entries (repl/inspection-rows state)
+        selected (repl/inspection-selection state entries)]
+    (bar! g palette width 0 :accent :raised
+          (str (inspection/heading (:inspection panel))
+               (when (:dirty? state) " · UNSAVED SOURCE")))
+    (bar! g palette width 1 (if (get-in panel [:inspection :error]) :error :text) :background
+          (inspection/status panel))
+    (if-let [lines (inspection-lines state width)]
+      (let [start (max 0 (min (- (count lines) page) (get state :inspection-scroll 0)))]
+        (style! g palette :text :background)
+        (doseq [[i line] (map-indexed vector (take page (drop start lines)))]
+          (text! g width 1 (+ i 2) line)))
+      (let [index (.indexOf ^java.util.List entries selected)
+            start (* page (quot (max index 0) page))]
+        (doseq [[i entry] (map-indexed vector (take page (drop start entries)))]
+          (let [selected? (= selected entry)]
+            (bar! g palette width (+ i 2)
+                  (if selected? :selected-text :text) (if selected? :selection :background)
+                  (str (if selected? "> " "  ") (inspection/label entry)))))
+        (when (> (count entries) page)
+          (bar! g palette width (- height 3) :muted :background
+                (str (inc index) "/" (count entries) " · PgUp/PgDn")))))
+    (bar! g palette width (- height 2) :text :background
+          "Tab: Live/Combined · ↑↓: navigate · Enter: open · Esc: back")
+    (bar! g palette width (dec height) :muted :background
+          "F4: console · F5: refresh · F7: interrupt · F8: disconnect")))
 
 (defn draw! [^TerminalScreen screen state full?]
   (let [size (.getTerminalSize screen)
@@ -256,7 +300,9 @@
       (or (< width 60) (< height 16))
       (do (text! g width 0 0 "Resize terminal to at least 60 × 16")
           (when (> height 1) (text! g width 0 1 (if (:repl-open? state) "Esc: source" "q: quit · t: theme"))))
-      (:repl-open? state) (repl-panel! screen g palette width height state)
+      (:repl-open? state) (if (:inspection-open? state)
+                            (inspection-panel! g palette width height state)
+                            (repl-panel! screen g palette width height state))
       :else
       (do
         (bar! g palette width 0 :accent :raised "CLOJURE SYSTEM BROWSER · Source World")
