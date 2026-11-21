@@ -1,0 +1,21 @@
+.code-area {
+    -fx-background-color: #fafbfc;
+    -fx-font-family: monospace;
+    -fx-font-size: 14px;
+    -fx-padding: 8px;
+    -fx-border-color: #b8c2cc;
+    -fx-border-radius: 3px;
+}
+.code-area:focused { -fx-border-color: #3973ac; }
+.code-area .text { -fx-fill: #24292f; }
+.code-area .syntax-special { -fx-fill: #8250a0; }
+.code-area .syntax-keyword { -fx-fill: #0550ae; }
+.code-area .syntax-string { -fx-fill: #116329; }
+.code-area .syntax-character { -fx-fill: #116329; }
+.code-area .syntax-comment { -fx-fill: #6e7781; -fx-font-style: italic; }
+.code-area .syntax-number { -fx-fill: #953800; }
+.code-area .syntax-literal { -fx-fill: #953800; }
+.code-area .syntax-reader { -fx-fill: #8250a0; }
+.code-area .syntax-delimiter { -fx-fill: #57606a; }
+.code-area .selection { -fx-fill: #c8def5; }
+.code-area .caret { -fx-stroke: #24292f; }

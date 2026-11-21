@@ -1,0 +1,9 @@
+.cpcache/
+.cache/
+target/
+*.class
+.clj-kondo/.cache/
+.lsp/
+__pycache__/
+.zcode/
+prompts/

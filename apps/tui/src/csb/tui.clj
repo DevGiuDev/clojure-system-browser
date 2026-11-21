@@ -1,0 +1,150 @@
+(ns csb.tui
+  (:require [csb.cli :as cli]
+            [csb.editor :as editor]
+            [csb.service :as service]
+            [csb.session :as session]
+            [csb.tui-terminal :as terminal]
+            [csb.tui-view :as view])
+  (:import [com.googlecode.lanterna.input KeyStroke KeyType]
+           [com.googlecode.lanterna.screen TerminalScreen]
+           [com.googlecode.lanterna.terminal DefaultTerminalFactory]))
+
+(defn- render-if-changed! [^TerminalScreen screen state last-frame]
+  (let [resized (.doResizeIfNecessary screen)
+        frame [state (.getTerminalSize screen)]]
+    (when (or resized (not= frame @last-frame))
+      (view/draw! screen state (or resized (nil? @last-frame)))
+      (vreset! last-frame frame))))
+
+(defn- move! [state direction]
+  (let [s @state focus (get s :focus 0)
+        values (case focus 0 (vec (session/namespaces s)) 1 (:entries (session/categories s)) 2 (session/definitions s))
+        selected (case focus 0 (:namespace s) 1 (:category s) 2 (get-in s [:definition :id]))
+        ids (case focus 0 values 1 (mapv :category values) 2 (mapv :id values))
+        idx (.indexOf ^java.util.List (vec ids) selected)
+        next-idx (max 0 (min (dec (count values)) (+ idx direction)))]
+    (when (seq values)
+      (case focus
+        0 (session/select-namespace! state (nth values next-idx))
+        1 (session/select-category! state (nth ids next-idx))
+        2 (session/select-definition! state (nth ids next-idx)))
+      (swap! state assoc :scroll 0 :editor-error nil))))
+
+(defn- editor-error! [state error argv temp]
+  (swap! state assoc :editor-error {:error error :argv argv :temp (some-> temp str)}
+         :help? false :diagnostics? false :source-order? false :scroll 0
+         :status (if temp
+                   (str "Editor failed; draft retained at " temp)
+                   (str "Editor configuration error: " (:message error)))))
+
+(defn- run-editor! [^TerminalScreen screen state argv editing]
+  (try
+    (.stopScreen screen)
+    (println "Opening external editor:" (pr-str argv))
+    (println "Finish the editor session to return to CSB. Press s there to save the project source.")
+    (flush)
+    (let [result (editor/launch! editing argv)
+          draft (when (= :ok (:status result)) (editor/read-draft editing))]
+      (if (and (= :ok (:status result)) (= :ok (:status draft)))
+        (do (session/edit! state (:value draft))
+            (editor/discard! editing)
+            (swap! state assoc :editor-error nil
+                   :status "Draft loaded from editor. Press s to save, d to discard."))
+        (editor-error! state (:error (if (= :error (:status result)) result draft)) argv (:temp editing))))
+    (catch Exception e
+      (editor-error! state {:type :editor :message (ex-message e)} argv (:temp editing)))
+    (finally (.startScreen screen) (.setCursorPosition screen nil))))
+
+(defn- edit-external! [^TerminalScreen screen state]
+  (if-not (get-in @state [:definition :writable?])
+    (swap! state assoc :status (str "This definition is read-only: "
+                                   (get-in @state [:definition :read-only-reason])))
+    (try
+      ;; Resolve configuration while the screen is active, before creating a temporary.
+      (let [argv (cli/editor-argv)
+            started (editor/begin! (assoc (:definition @state) :source (:draft @state)))]
+        (if (= :error (:status started))
+          (editor-error! state (:error started) argv nil)
+          (run-editor! screen state argv (:value started))))
+      (catch Exception e
+        (editor-error! state {:type (get (ex-data e) :type :invalid-editor) :message (ex-message e)} nil nil)))))
+
+(defn- extension! [state kind]
+  (if-let [c (when-let [system (:system @state)] (first (service/contributions system kind)))]
+    (session/extension! state kind (:id c))
+    (swap! state assoc :status "No extension loaded. Use --example-extension for the bundled example.")))
+
+(defn- retain-draft! [state]
+  (let [recovered (editor/begin! (assoc (:definition @state) :source (:draft @state)))]
+    (swap! state assoc :recovery (if (= :ok (:status recovered))
+                                  (str "Unsaved draft retained at " (get-in recovered [:value :temp]))
+                                  (str "Could not retain unsaved draft: " (get-in recovered [:error :message]))))))
+
+(defn- step! [^TerminalScreen screen state last-frame]
+  (render-if-changed! screen @state last-frame)
+  (let [^KeyStroke key (.pollInput screen)
+        type (when key (.getKeyType key))
+        ch (when key (.getCharacter key))
+        page-size (view/page-size (.getRows (.getTerminalSize screen)))
+        eof? (= type KeyType/EOF)
+        quit? (= ch \q)]
+    (when (and eof? (:dirty? @state)) (retain-draft! state))
+    (if (or eof? (and quit? (not (:dirty? @state))))
+      false
+      (do
+        (cond
+          quit? (swap! state assoc :status "Unsaved changes: s to Save or d to Discard, then q")
+          (= type KeyType/Tab) (swap! state update :focus #(mod (inc (or % 0)) 3))
+          (= type KeyType/ArrowRight) (swap! state update :focus #(mod (inc (or % 0)) 3))
+          (= type KeyType/ArrowLeft) (swap! state update :focus #(mod (+ 2 (or % 0)) 3))
+          (= type KeyType/ArrowDown) (move! state 1)
+          (= type KeyType/ArrowUp) (move! state -1)
+          (= type KeyType/PageDown) (swap! state update :scroll #(+ page-size (or % 0)))
+          (= type KeyType/PageUp) (swap! state update :scroll #(max 0 (- (or % 0) page-size)))
+          (= ch \?) (swap! state #(assoc % :help? (not (:help? %)) :diagnostics? false :scroll 0))
+          (= ch \!) (swap! state #(assoc % :diagnostics? (not (:diagnostics? %)) :help? false :scroll 0))
+          (= ch \o) (swap! state #(assoc % :source-order? (not (:source-order? %))
+                                           :help? false :diagnostics? false :scroll 0))
+          (= type KeyType/Escape) (swap! state assoc :editor-error nil :help? false :diagnostics? false
+                                         :source-order? false :scroll 0)
+          (= ch \s) (session/save! state)
+          (= ch \d) (do (session/discard! state) (swap! state assoc :editor-error nil))
+          (= ch \r) (do (session/reload! state) (swap! state assoc :editor-error nil))
+          (= ch \e) (do (edit-external! screen state)
+                          ;; Returning from an editor invalidates the terminal front buffer,
+                          ;; even if the editor left the draft/status unchanged.
+                          (vreset! last-frame nil))
+          (= ch \t) (swap! state update :theme #(if (= % :light) :dark :light))
+          (= ch \x) (extension! state :commands)
+          (= ch \v) (extension! state :views))
+        (if key
+          (render-if-changed! screen @state last-frame)
+          (Thread/sleep 30))
+        true))))
+
+(defn- run-screen! [^TerminalScreen screen state]
+  (try
+    (.startScreen screen)
+    (.setCursorPosition screen nil)
+    (let [last-frame (volatile! nil)]
+      (loop [] (when (step! screen state last-frame) (recur))))
+    (finally (.close screen))))
+
+(defn -main [& args]
+  (try
+    (let [{:keys [project help?] :as options} (cli/arguments args)]
+      (if help?
+        (println "clojure -M:tui --project PATH [--source-root DIR ...] [--example-extension]\nPress ? inside the browser for keyboard help.")
+        (terminal/with-input-settings
+          (fn []
+            ;; Screen.close stops drawing; close the terminal too, before the
+            ;; outer settings restore, so its shutdown hook cannot undo it.
+            (with-open [device (.createTerminal (doto (DefaultTerminalFactory.) (.setForceTextTerminal true)))]
+              (let [state (session/create)
+                    screen (TerminalScreen. device)]
+                (session/open! state project options)
+                (run-screen! screen state)
+                (when-let [recovery (:recovery @state)] (binding [*out* *err*] (println recovery)))))))))
+    (catch Exception e
+      (binding [*out* *err*] (println (ex-message e)))
+      (System/exit 1))))
