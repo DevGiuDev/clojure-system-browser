@@ -315,7 +315,11 @@
       (let [system (opened root)
             files (:value (service/list-source-forms system 'demo))
             forms (mapcat :forms files)]
-        (is (= [(str (.resolve root "src/demo.clj"))] (mapv :file files)))
+        ;; The adapter real-resolves the project root, so compare against
+        ;; real paths (macOS temp dirs live behind the /var symlink).
+        (is (= [(str (.toRealPath (.resolve root "src/demo.clj")
+                                  (make-array java.nio.file.LinkOption 0)))]
+               (mapv :file files)))
         ;; Every significant top-level form, in real file order, including the
         ;; forms the definition index skips.
         (is (= ["ns" "defn" "declare" "comment" "#_" "#=" "start-server" "defmacro"]
@@ -339,7 +343,8 @@
       (fn [root]
         (let [system (opened root)
               files (:value (service/list-source-forms system 'demo))]
-          (is (= (mapv str [(.resolve root "src/a.clj") (.resolve root "src/b.clj")])
+          (is (= (mapv #(str (.toRealPath % (make-array java.nio.file.LinkOption 0)))
+                       [(.resolve root "src/a.clj") (.resolve root "src/b.clj")])
                  (mapv :file files)))
           (is (= ["ns" "defn" "defn"] (mapv :label (:forms (first files)))))
           ;; BOM stays out of previews; rows are 1-based file lines with CRLF intact.

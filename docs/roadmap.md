@@ -38,8 +38,8 @@ checks** and clean lint. See [verification](verification.md) and
 
 | Milestone | Available code | Pending validation |
 |---|---|---|
-| 0: preparation | deps, example, tests, decisions and CI; dependencies available; automated test in pseudoterminal with real Vim | Manual TUI demonstration per platform |
-| 1: core and source | Index, categories, extraction and Save; `.cljd` reading; lexical classifier without UI; 40 tests pass with rewrite-clj 1.3.59 | System matrix in CI |
+| 0: preparation | deps, example, tests and decisions; dependencies available; automated test in pseudoterminal with real Vim | Manual TUI demonstration per platform |
+| 1: core and source | Index, categories, extraction and Save; `.cljd` reading; lexical classifier without UI; 40 tests pass with rewrite-clj 1.3.59 | Manual platform matrix |
 | 2: Desktop | Four panels, syntax highlighting, filter, draft, Save/Discard/Reload; controls, colors, selection, undo, shortcut, conflicts and errors tested headless with JDK 27 | Full visual demonstration and manual interaction |
 | 3: TUI | Dark/light themes with `t`, lexical highlighting shared with Desktop, contrast and change-driven refresh; virtual terminal and 40 checks with pseudoterminal/real Vim; Save/Ctrl+S, conflicts, permissions and terminal restoration | Full manual interaction, highlighting inside Emacs/EXWM and per-platform behavior |
 | 4: polish/extension | Registry v1, command, view and documentation | Validation of both clients and system matrix |
@@ -58,10 +58,12 @@ The core and automated interaction suites of Desktop/TUI pass with the pinned
 versions. Owner decision (2026-11-21): the smoke test is considered validated
 and work continues with the next feature; the full acceptance matrix remains
 recorded as not manually demonstrated. The chosen feature is
-[definition order](definition-order.md). CI checks run locally; a Git remote
-has now been configured (`origin`), but the workflow has not yet run on it —
-its first remote execution remains pending. Manual launching
-(`workflow_dispatch`) is also enabled.
+[definition order](definition-order.md). A Git remote (`origin`) exists since
+2026-11-21. The GitHub Actions workflow ran once on the initial push:
+headless Desktop passed; the macOS core job exposed two macOS-only
+path-resolution assertions (fixed in the same commit), and ubuntu/Windows
+were cancelled by fail-fast. Owner decision: the workflow was removed — the
+prototype relies on local checks, and no remote CI execution is claimed.
 
 ## Pending decision: save-time validation
 

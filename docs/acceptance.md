@@ -152,20 +152,18 @@ Do not mark a checkbox based only on the automated suite. Attach date,
 environment, result and a reference to issues or evidence when completing
 each workflow.
 
-| System | Manual Desktop | Manual TUI and editor | Keyboard, resize and scale | Remote CI |
-|---|---|---|---|---|
-| Linux | Pending | Pending | Pending | Pending |
-| macOS | Pending | Pending | Pending | Pending |
-| Windows | Pending | Pending | Pending | Pending |
+| System | Manual Desktop | Manual TUI and editor | Keyboard, resize and scale |
+|---|---|---|---|
+| Linux | Pending | Pending | Pending |
+| macOS | Pending | Pending | Pending |
+| Windows | Pending | Pending | Pending |
 
-CI configures core/TUI on the three systems and headless Desktop on Linux.
-It does not by itself demonstrate manual interaction or Desktop on
-macOS/Windows. The workflow supports `workflow_dispatch`; running it requires
-the repository and a branch containing these changes. When this note was
-written, the copy had no useful Git metadata nor an identified remote; on
-2026-11-21 a Git repository and the `origin` remote were initialized, but no
-commit or push has happened and no remote run has occurred. A remote
-execution is not recorded as passed.
+There is no remote CI: the owner removed the GitHub Actions workflow on
+2026-11-21 (the prototype relies on local checks). Its single run — headless
+Desktop passed on Linux; the macOS core job surfaced two path-resolution
+assertions, fixed in the removal commit — is recorded in
+[verification](verification.md) and demonstrated no manual workflow. The
+columns above remain the pending evidence.
 
 The MVP remains open while this evidence is missing. Live World/nREPL stays
 in Milestone 5; the Test Runner, in Milestone 6.

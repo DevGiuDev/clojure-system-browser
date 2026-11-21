@@ -36,7 +36,7 @@ The main goal was to validate an idea and get a working MVP as fast as possible.
   checks**, with no failures; lint reports no warnings. Core tests use JDK 27 and
   21; client tests use JDK 27. See [verification](docs/verification.md).
 - The MVP **is not considered complete** until the full interaction workflow has
-  been demonstrated in both clients on supported systems and remote CI has run.
+  been demonstrated in both clients on supported systems.
   Next design decision: [forward-reference diagnostics](docs/definition-order.md)
   (option 2; the read-only source order view is already implemented).
   See the [roadmap](docs/roadmap.md).
@@ -328,9 +328,11 @@ temporary copies of the example with BOM, Unicode and CRLF, and compare the
 complete file bytes. UI I/O errors are injected at the write point; Save and the
 service remain real.
 
-CI is configured in `.github/workflows/check.yml` and has not yet run on a remote
-server. It supports `workflow_dispatch`, push and pull request events. For an
-explicit local-cache check without changing production dependencies:
+There is no remote CI: the prototype relies on the local checks above. A GitHub
+Actions workflow existed briefly on 2026-11-21 and was removed by owner
+decision; its single run surfaced two macOS-only test assertions, fixed in the
+same commit (see [verification.md](docs/verification.md)). For an explicit
+local-cache check without changing production dependencies:
 
 ```sh
 python3 scripts/check-cached.py --java /path/to/jdk-27/bin/java --cached-rewrite 1.2.50

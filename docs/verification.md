@@ -16,8 +16,8 @@ connected.
 | clj-kondo | — | — | 0 errors, 0 warnings |
 
 The TUI theme appearance is confirmed by the user in Emacs/EXWM. Full manual
-acceptance, review of the highlighting in that session and remote CI remain
-pending. The 2026-11-21 totals include the tests of the source order view
+acceptance and review of the highlighting in that session remain pending. The
+2026-11-21 totals include the tests of the source order view
 ([ADR 008](decisions/008-source-order-view.md)) and of the category facets
 ([ADR 009](decisions/009-category-facets.md)); their manual on-screen
 interaction remains undemonstrated. All four checks were re-run on 2026-11-21
@@ -351,14 +351,19 @@ session) remains pending per [acceptance](acceptance.md).
 2. Check keyboard, scaling and resize on Linux, macOS and Windows; also
    review JavaFX classifiers/natives on the architectures that get
    distributed.
-3. Run remote CI. All four checks have run locally on Linux with JDK 27. The
-   workflow now supports `workflow_dispatch` and its lint includes
-   `test-support` and `deps.edn`. At the time these lines were recorded,
-   this copy contained no useful Git metadata nor an identified remote, so a
-   remote workflow could not be dispatched. A Git repository and the `origin`
-   remote were initialized on 2026-11-21, but no commit or push has happened
-   and no remote run has occurred; its existence is not presented as a
-   passing execution.
+
+## Remote CI (removed)
+
+A GitHub Actions workflow existed briefly. Its single run (initial push,
+2026-11-21): the headless Desktop job passed on ubuntu; the macOS core job
+failed with 2 failures in `csb.source-test` — assertions compared
+`(.resolve root ...)` against `:file` values the adapter real-resolves
+(`/var` vs `/private/var` behind the runner's temp-dir symlink) — and the
+ubuntu/Windows matrix jobs were cancelled by fail-fast. Those two assertions
+were fixed to compare real paths in the same commit that removed the
+workflow. Owner decision (2026-11-21): the project is a prototype and
+verification relies on the local checks above; no remote CI execution is
+claimed.
 
 The tests do not demonstrate a compare-and-swap operation against external
 editors, crash durability, or complete compatibility with every reader form.
