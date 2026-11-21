@@ -36,7 +36,9 @@ TUI/CLI uberjar (`clojure -T:build uber`, no JavaFX inside, main
 `csb.tui` with `:gen-class`), and a build-only workflow triggered by `v*`
 tags publishes the jar and the `csb` launcher script to GitHub Releases.
 The Desktop is not packaged; jpackage and native binaries stay out of
-scope. The workflow has not been executed remotely.
+scope. The workflow ran successfully on the `v0.2.0` tag (its first remote
+execution, run 44950510002) and the published assets were exercised
+locally; test CI remains removed.
 
 Latest recorded verification: **69 tests / 662 assertions**, **40 process
 checks** and clean lint. Live World/nREPL and the Test Runner remain

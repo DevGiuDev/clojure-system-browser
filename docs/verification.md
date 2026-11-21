@@ -163,10 +163,19 @@ unchanged and the TUI suite still passes). The rebuilt jar printed the
 version and TUI help through `java -jar` on Java 21, and its entries contain
 lanterna classes with zero JavaFX/cljfx/richtext classes. The `csb` launcher
 was exercised next to the jar (help path) and without it (expected error,
-exit 1). The workflow YAML was validated syntactically and its published
-references verified (checkout v7, setup-java v6, setup-clojure 13.7.0,
-JDK 21, Clojure CLI 1.12.2.1565), but it has NOT been executed remotely and
-no remote CI execution is claimed.
+exit 1). Before the remote run, the workflow YAML was validated syntactically
+and its published references verified (checkout v7, setup-java v6,
+setup-clojure 13.7.0, JDK 21, Clojure CLI 1.12.2.1565).
+
+The workflow was then executed remotely by pushing the tag `v0.2.0`
+(run 44950510002, 30 seconds): checkout, JDK and Clojure CLI setup, the
+tag/version check, the uber build and the release publication all passed on
+the first run. The published assets were downloaded and exercised locally:
+`csb --help` printed `clojure-system-browser 0.2.0`, and a pty driver that
+answers Lanterna's cursor-position report ran the published jar's TUI
+against `examples/poly-sample-project`, which rendered its 10 namespaces
+with 0 source errors — including the brick, `development` and `projects`
+roots. This is a build-artifact check, not a resumption of test CI.
 
 ## Automated UI interaction
 
