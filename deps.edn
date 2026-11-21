@@ -22,4 +22,6 @@
   :tui {:extra-paths ["apps/tui/src"]
         :extra-deps {com.googlecode.lanterna/lanterna {:mvn/version "3.1.5"}}
         :main-opts ["-m" "csb.tui"]}
-  :tui-test {:extra-paths ["test-tui" "test-support"] :main-opts ["-m" "csb.tui-smoke"]}}}
+  :tui-test {:extra-paths ["test-tui" "test-support"] :main-opts ["-m" "csb.tui-smoke"]}
+  :build {:deps {io.github.clojure/tools.build {:mvn/version "0.10.14"}}
+          :ns-default build}}}

@@ -99,7 +99,7 @@ With a compatible JDK selected, run the relevant checks:
 
 ```sh
 clojure -Srepro -M:test
-clj-kondo --lint src apps test test-desktop test-tui test-support deps.edn
+clj-kondo --lint src apps test test-desktop test-tui test-support deps.edn build.clj
 clojure -Srepro -M:desktop:desktop-test
 clojure -Srepro -M:tui:tui-test
 ```

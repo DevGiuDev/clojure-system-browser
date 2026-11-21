@@ -1,0 +1,4 @@
+{:deps {poly/sample-shop {:local/root "../../components/shop"}
+        poly/sample-warehouse {:local/root "../../components/warehouse"}
+        poly/sample-worker {:local/root "../../bases/worker"}}
+ :aliases {:test {:extra-paths []}}}

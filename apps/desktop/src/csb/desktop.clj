@@ -67,7 +67,7 @@
         extensions (when system
                      (concat (map #(assoc % :kind :commands) (service/contributions system :commands))
                              (map #(assoc % :kind :views) (service/contributions system :views))))]
-    {:fx/type :stage :title (str (when dirty? "* ") "Clojure System Browser · Source World")
+    {:fx/type :stage :title (str (when dirty? "* ") "Clojure System Browser " cli/version " · Source World")
      :showing true :width 1100 :height 780 :min-width 760 :min-height 540
      :on-close-request (:close actions)
      :scene
@@ -184,7 +184,9 @@
   (try
     (let [{:keys [project help?] :as options} (cli/arguments args)]
       (if help?
-        (do (println "clojure -M:desktop --project PATH [--source-root DIR ...] [--example-extension]") (Platform/exit))
+        (do (println (str "clojure-system-browser " cli/version
+                          "\nclojure -M:desktop --project PATH [--source-root DIR ...] [--example-extension]"))
+            (Platform/exit))
         (let [state (session/create)
               {:keys [actions submit!]} (controller state options)
               renderer (fx/create-renderer :middleware (fx/wrap-map-desc #(view % actions)))]

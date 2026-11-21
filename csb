@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# Clojure System Browser launcher for the release uberjar (ADR 012).
+# Expects the release jar next to this script; JAVA_CMD overrides java.
+set -e
+dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+jar=
+for f in "$dir"/clojure-system-browser-*.jar; do
+  if [ -e "$f" ]; then jar=$f; break; fi
+done
+if [ -z "$jar" ]; then
+  echo "csb: no clojure-system-browser-*.jar found next to this script" >&2
+  exit 1
+fi
+exec "${JAVA_CMD:-java}" -jar "$jar" "$@"

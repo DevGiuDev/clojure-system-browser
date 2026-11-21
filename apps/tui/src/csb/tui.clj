@@ -7,7 +7,10 @@
             [csb.tui-view :as view])
   (:import [com.googlecode.lanterna.input KeyStroke KeyType]
            [com.googlecode.lanterna.screen TerminalScreen]
-           [com.googlecode.lanterna.terminal DefaultTerminalFactory]))
+           [com.googlecode.lanterna.terminal DefaultTerminalFactory])
+  ;; Generates the class with the static main the release uberjar needs
+  ;; (java -jar); harmless for the documented clojure -M:tui launch.
+  (:gen-class))
 
 (defn- render-if-changed! [^TerminalScreen screen state last-frame]
   (let [resized (.doResizeIfNecessary screen)
@@ -134,7 +137,9 @@
   (try
     (let [{:keys [project help?] :as options} (cli/arguments args)]
       (if help?
-        (println "clojure -M:tui --project PATH [--source-root DIR ...] [--example-extension]\nPress ? inside the browser for keyboard help.")
+        (println (str "clojure-system-browser " cli/version
+                      "\nclojure -M:tui --project PATH [--source-root DIR ...] [--example-extension]"
+                      "\nPress ? inside the browser for keyboard help."))
         (terminal/with-input-settings
           (fn []
             ;; Screen.close stops drawing; close the terminal too, before the

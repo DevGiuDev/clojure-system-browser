@@ -1,0 +1,7 @@
+{:top-namespace "poly.sample"
+ :interface-ns "interface"
+ :default-profile-name "default"
+ :compact-maps? false
+ :thousand-separator ","
+ :projects {"development" {:alias "dev"}
+            "app" {:alias "app"}}}

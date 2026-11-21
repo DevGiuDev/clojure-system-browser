@@ -16,7 +16,29 @@ Also implemented are category facets with counts and the namespace summary
 shows all definitions of the namespace; Desktop and the TUI only format. The
 central panel is no longer limited to two or three uninformative types.
 
-Latest recorded verification: **65 tests / 648 assertions**, **40 process
+Implemented Polylith workspace discovery
+([ADR 010](decisions/010-polylith-discovery.md)), closing
+[issue #1](https://github.com/DevGiuDev/clojure-system-browser/issues/1):
+when `deps.edn` declares no top-level `:paths` and the project carries a
+`workspace.edn` (or both `components` and `bases` folders), the adapter
+derives the conventional brick roots from the filesystem alone, without
+executing anything. `examples/poly-sample-project` is a minimal browsable
+workspace with that layout, and save keeps its guarantees.
+
+Versioning was added ([ADR 011](decisions/011-versioning-changelog.md)): the
+version (0.2.0) lives in `csb.cli/version`, is shown by the CLI, Desktop and
+TUI `--help` output and the Desktop title, and is kept in sync manually with
+the new `CHANGELOG.md`, which records 0.1.0 and 0.2.0.
+
+Release packaging was added
+([ADR 012](decisions/012-release-packaging.md)): `build.clj` produces the
+TUI/CLI uberjar (`clojure -T:build uber`, no JavaFX inside, main
+`csb.tui` with `:gen-class`), and a build-only workflow triggered by `v*`
+tags publishes the jar and the `csb` launcher script to GitHub Releases.
+The Desktop is not packaged; jpackage and native binaries stay out of
+scope. The workflow has not been executed remotely.
+
+Latest recorded verification: **69 tests / 662 assertions**, **40 process
 checks** and clean lint. Live World/nREPL and the Test Runner remain
 unimplemented.
 
@@ -39,7 +61,7 @@ checks** and clean lint. See [verification](verification.md) and
 | Milestone | Available code | Pending validation |
 |---|---|---|
 | 0: preparation | deps, example, tests and decisions; dependencies available; automated test in pseudoterminal with real Vim | Manual TUI demonstration per platform |
-| 1: core and source | Index, categories, extraction and Save; `.cljd` reading; lexical classifier without UI; 40 tests pass with rewrite-clj 1.3.59 | Manual platform matrix |
+| 1: core and source | Index, categories, extraction and Save; `.cljd` reading; Polylith workspace discovery ([ADR 010](decisions/010-polylith-discovery.md)); lexical classifier without UI; 40 tests pass with rewrite-clj 1.3.59 | Manual platform matrix |
 | 2: Desktop | Four panels, syntax highlighting, filter, draft, Save/Discard/Reload; controls, colors, selection, undo, shortcut, conflicts and errors tested headless with JDK 27 | Full visual demonstration and manual interaction |
 | 3: TUI | Dark/light themes with `t`, lexical highlighting shared with Desktop, contrast and change-driven refresh; virtual terminal and 40 checks with pseudoterminal/real Vim; Save/Ctrl+S, conflicts, permissions and terminal restoration | Full manual interaction, highlighting inside Emacs/EXWM and per-platform behavior |
 | 4: polish/extension | Registry v1, command, view and documentation | Validation of both clients and system matrix |

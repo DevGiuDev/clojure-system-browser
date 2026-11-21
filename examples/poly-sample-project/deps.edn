@@ -1,0 +1,9 @@
+;; Polylith-style workspace configuration: paths live in aliases, so there is
+;; no top-level :paths for the browser to read. Discovery follows the brick
+;; conventions instead and never executes this file.
+{:aliases
+ {:dev {:extra-paths ["components/shop/src" "components/warehouse/src"
+                      "bases/worker/src" "development/src"]
+        :extra-deps {}}
+  :test {:extra-paths ["components/shop/test" "components/warehouse/test"
+                       "development/test"]}}}

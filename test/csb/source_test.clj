@@ -138,6 +138,62 @@
   (with-project {"deps.edn" "{:paths [\"../outside\"]}"}
     (fn [root] (is (= :unsupported (get-in (service/open-project root) [:error :type]))))))
 
+(deftest polylith-workspace-is-discovered-by-convention
+  (with-project
+    {"deps.edn" "{:aliases {:dev {:extra-paths [\"components/shop/src\" \"bases/worker/src\"]}}}"
+     "components/shop/src/shop/interface.clj" "(ns shop.interface (:require [shop.components.invoice :as invoice]))"
+     "components/shop/src/shop/components/invoice.clj" "(ns shop.components.invoice)\n(defn total [items] (reduce + 0 (map :price items)))"
+     "components/shop/test/shop/components/invoice_test.clj" "(ns shop.components.invoice-test)\n(deftest total-test (is true))"
+     "bases/worker/src/worker/bases/cli.clj" "(ns worker.bases.cli)\n(defn start [opts] opts)"
+     "development/src/dev/scratch.clj" "(ns dev.scratch)\n(defonce seed 42)"
+     "projects/app/src/app/core.clj" "(ns app.core)\n(def version \"0.1.0\")"}
+    (fn [root]
+      (let [system (opened root)
+            real-root (.toRealPath root (make-array java.nio.file.LinkOption 0))]
+        (is (= #{'shop.interface 'shop.components.invoice 'shop.components.invoice-test
+                 'worker.bases.cli 'dev.scratch 'app.core}
+               (set (:value (service/list-namespaces system)))))
+        (is (= #{"components/shop/src" "components/shop/test" "bases/worker/src"
+                 "development/src" "projects/app/src"}
+               (set (map #(str (.relativize real-root (source/path %)))
+                         (:roots (service/project-info system))))))
+        (let [d (->> (:value (service/list-definitions system 'shop.components.invoice)) first)]
+          (is (true? (:writable? d)))
+          (is (= :ok (:status (service/save-definition! system (:id d) "(defn total [items] 0)"
+                                                        {:expected-revision (:revision d)}))))
+          (is (.contains (Files/readString
+                          (.resolve root "components/shop/src/shop/components/invoice.clj"))
+                         "(defn total [items] 0)")))))))
+
+(deftest polylith-workspace-edn-is-enough-to-detect-the-layout
+  (with-project {"workspace.edn" "{:top-namespace \"poly.sample\"}"
+                 "components/shop/src/shop/interface.clj" "(ns shop.interface)"
+                 "bases/worker/src/worker/bases/cli.clj" "(ns worker.bases.cli) (defn -main [& _] nil)"}
+    (fn [root]
+      (is (= #{'shop.interface 'worker.bases.cli}
+             (set (:value (service/list-namespaces (opened root)))))))))
+
+(deftest polylith-detection-respects-explicit-configuration
+  (with-project {"deps.edn" "{:paths [\"src\"]}"
+                 "src/demo.clj" "(ns demo) (defn f [] 1)"
+                 "components/shop/src/shop/invoice.clj" "(ns shop.invoice) (defn total [] 1)"
+                 "bases/worker/src/worker/cli.clj" "(ns worker.cli) (defn start [] 1)"}
+    (fn [root]
+      (is (= ['demo] (:value (service/list-namespaces (opened root)))))))
+  (with-project {"components/shop/src/shop/invoice.clj" "(ns shop.invoice) (defn total [] 1)"
+                 "bases/worker/src/worker/cli.clj" "(ns worker.cli) (defn start [] 1)"
+                 "development/src/dev/scratch.clj" "(ns dev.scratch) (defonce seed 42)"}
+    (fn [root]
+      (let [r (service/open-project root {:roots ["development/src"]})]
+        (is (= :ok (:status r)) (pr-str r))
+        (is (= ['dev.scratch] (:value (service/list-namespaces (:value r)))))))))
+
+(deftest lone-components-directory-is-not-a-polylith-workspace
+  (with-project {"components/shop/src/shop/invoice.clj" "(ns shop.invoice) (defn total [] 1)"
+                 "src/demo.clj" "(ns demo) (defn f [] 1)"}
+    (fn [root]
+      (is (= ['demo] (:value (service/list-namespaces (opened root))))))))
+
 (deftest clojuredart-sources-are-discovered-without-loading-the-project
   (let [code (str "(ns ^{:no-dynamic true} demo.dart (:require [\"dart:io\" :as io]))\n"
                   "(defonce handle (#/(io/File \"example\")))\n"

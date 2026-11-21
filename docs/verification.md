@@ -8,10 +8,10 @@ connected.
 
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
-| Core, external editor, lexical classifier, source order and facets | 44 | 357 | No failures or errors; JDK 27 and 21 |
+| Core, external editor, lexical classifier, source order, facets and Polylith discovery | 48 | 371 | No failures or errors; JDK 27 and 21 |
 | Desktop with headless JavaFX controls | 8 | 90 | No failures or errors; JDK 27 |
 | TUI with virtual terminal | 13 | 201 | No failures or errors; JDK 27 |
-| Suite total | **65** | **648** | No failures or errors |
+| Suite total | **69** | **662** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | **40 checks**, no failures |
 | clj-kondo | — | — | 0 errors, 0 warnings |
 
@@ -23,6 +23,13 @@ acceptance and review of the highlighting in that session remain pending. The
 interaction remains undemonstrated. All four checks were re-run on 2026-11-21
 after renaming the facets sentinel label to "(all)" (previously "(todas)"):
 same totals — core 44/357, Desktop 8/90, TUI 13/201, lint clean.
+
+The core suite grew on 2026-11-21 with the Polylith workspace discovery tests
+([ADR 010](decisions/010-polylith-discovery.md)): core 48/371 (run with the
+machine's Java 21; the core stays JavaFX-independent), Desktop 8/90 and TUI
+13/201 re-run with JDK 27 via `JAVA_CMD` — the PATH Java is 21 and JavaFX 27
+refuses it — for a suite total of **69 tests / 662 assertions** and lint
+clean.
 
 [Definition order](definition-order.md) has its option 1 implemented (source
 order view, read-only) with automated verification in all three suites.
@@ -52,9 +59,9 @@ with no overrides to older ones. The recommended Clojure CLI version is
 JAVA_CMD=/usr/lib/jvm/java-27-openjdk/bin/java clojure -Srepro -M:test
 ```
 
-Result: **44 tests, 357 assertions, 0 failures and 0 errors** (2026-11-21; the
-previous run of 2026-11-15 recorded 40/322). The earlier suite also passes
-with Java 21, keeping the core independent of JavaFX.
+Result: **48 tests, 371 assertions, 0 failures and 0 errors** (2026-11-21, run
+with the machine's Java 21; earlier runs of the same suite with JDK 27 keep
+the core independent of JavaFX; the 2026-11-15 run recorded 40/322).
 
 Main coverage:
 
@@ -70,6 +77,14 @@ Main coverage:
   read-only mode.
 - Configured paths without executing aliases; rejection of roots outside the
   project.
+- Polylith discovery (2026-11-21): a workspace with `components`, `bases`,
+  `development`, `projects` and no top-level `:paths` resolves its brick
+  `src`/`test`, `development` and rare project `src` roots from the
+  filesystem alone, reports them in `project-info`, and Save inside a brick
+  keeps its guarantees; `workspace.edn` alone also triggers the layout;
+  `deps.edn` `:paths` and explicit `:roots` keep precedence; a lone
+  `components` folder does not switch the layout
+  ([ADR 010](decisions/010-polylith-discovery.md)).
 - Parsing errors, invalid UTF-8, deleted file and write failures.
 - Symbolic link exclusion and permission errors on this Linux.
 - Partial result when saving is confirmed but reindexing fails.
@@ -102,12 +117,56 @@ Main coverage:
   shell expansion.
 
 ```sh
-clj-kondo --lint src apps test test-desktop test-tui test-support deps.edn
+clj-kondo --lint src apps test test-desktop test-tui test-support deps.edn build.clj
 ```
 
 Result: **0 errors, 0 warnings**. It includes both clients and their
 interaction tests; a static result is not equivalent to executing those
 interfaces.
+
+## Polylith example through the CLI (2026-11-21)
+
+```sh
+clojure -Srepro -M:cli --project examples/poly-sample-project
+clojure -Srepro -M:cli --project examples/sample-project
+```
+
+With no `--source-root` options, the Polylith example opens `:status :ok`
+with its 10 namespaces — component, base and `development` sources and tests
+plus the rare `projects/app/src` — indexed definitions, tests and values
+correctly read-only, and empty diagnostics. The classic example keeps its
+previous result (2 namespaces), showing the detection does not alter projects
+with `:paths`. On-screen Desktop/TUI interaction with the Polylith example
+was not demonstrated; headless runs and the CLI are the executed evidence.
+
+## Version display (2026-11-21)
+
+`csb.cli/version` ("0.2.0", [ADR 011](decisions/011-versioning-changelog.md))
+was verified through `clojure -Srepro -M:cli --help`, which prints
+`clojure-system-browser 0.2.0` before the usage lines. After the help and
+title changes, the three suites were re-run with the same totals recorded in
+the summary table (core 48/371 with Java 21; Desktop 8/90 and TUI 13/201 with
+JDK 27 via `JAVA_CMD`) and lint stayed clean. The TUI `--help` string and the
+Desktop window title are not asserted by their suites; neither help path was
+exercised beyond the CLI.
+
+## Release packaging (2026-11-21)
+
+Locally executed ([ADR 012](decisions/012-release-packaging.md)):
+`clojure -T:build version` prints exactly `0.2.0`, read from `src/csb/cli.clj`
+without evaluating it, and `clojure -T:build uber` (tools.build **0.10.14**
+from Maven Central) produced `target/clojure-system-browser-0.2.0.jar`. The
+first build shipped a jar that failed with `ClassNotFoundException: csb.tui`
+— the AOT of a namespace without `:gen-class` does not emit the main class;
+fixed by adding `(:gen-class)` to `csb.tui` (the `clojure -M:tui` launch is
+unchanged and the TUI suite still passes). The rebuilt jar printed the
+version and TUI help through `java -jar` on Java 21, and its entries contain
+lanterna classes with zero JavaFX/cljfx/richtext classes. The `csb` launcher
+was exercised next to the jar (help path) and without it (expected error,
+exit 1). The workflow YAML was validated syntactically and its published
+references verified (checkout v7, setup-java v6, setup-clojure 13.7.0,
+JDK 21, Clojure CLI 1.12.2.1565), but it has NOT been executed remotely and
+no remote CI execution is claimed.
 
 ## Automated UI interaction
 

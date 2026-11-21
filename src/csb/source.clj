@@ -268,6 +268,40 @@
                    {:file (str file)})))
       (finally (Files/deleteIfExists tmp)))))
 
+(defn- subdirectories [^Path dir]
+  (with-open [stream (Files/newDirectoryStream dir)]
+    (->> (iterator-seq (.iterator stream))
+         (filter #(Files/isDirectory ^Path % no-links))
+         (sort-by str)
+         vec)))
+
+(defn- existing-roots [^Path dir subs]
+  (->> subs
+       (map #(.resolve ^Path dir (str %)))
+       (filter #(Files/isDirectory % no-links))
+       (mapv str)))
+
+(defn- polylith? [^Path root]
+  (or (Files/isRegularFile (.resolve root "workspace.edn") no-links)
+      (Files/isRegularFile (.resolve root ".polylith/workspace.edn") no-links)
+      (and (Files/isDirectory (.resolve root "components") no-links)
+           (Files/isDirectory (.resolve root "bases") no-links))))
+
+(defn- polylith-roots
+  "Conventional Polylith layout, derived from the filesystem only and never from
+   executing the workspace: every brick under components/ and bases/ contributes
+   its src and test, development contributes src and test, and a project
+   contributes its rare src. Explicit roots and deps.edn :paths take precedence."
+  [^Path root]
+  (let [brick-family (fn [^Path dir subs]
+                       (when (Files/isDirectory dir no-links)
+                         (mapcat #(existing-roots % subs) (subdirectories dir))))
+        projects (.resolve root "projects")]
+    (vec (concat
+          (mapcat #(brick-family (.resolve root %) ["src" "test"]) ["components" "bases"])
+          (existing-roots (.resolve root "development") ["src" "test"])
+          (brick-family projects ["src"])))))
+
 (defn- source-paths [^Path root roots]
   (let [configured (or roots
                        (let [deps (.resolve root "deps.edn")]
@@ -275,7 +309,10 @@
                            (:paths (edn/read-string {:readers {} :default (fn [tag _]
                                                    (m/fail! :unsupported "Unsupported deps.edn tag" {:tag tag}))}
                                      (decode (Files/readAllBytes deps)))))))
-        candidates (if (seq configured) configured ["src" "test"])]
+        candidates (cond
+                     (seq configured) configured
+                     (polylith? root) (polylith-roots root)
+                     :else ["src" "test"])]
     (when-not (and (sequential? candidates) (every? string? candidates))
       (m/fail! :invalid-project "Source roots must be a sequence of strings" {}))
     (mapv (fn [s]

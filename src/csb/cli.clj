@@ -2,6 +2,9 @@
   (:require [csb.editor :as editor]
             [csb.service :as service]))
 
+;; Application version, kept in sync with CHANGELOG.md (ADR 011).
+(def version "0.2.0")
+
 (defn arguments [args]
   (loop [args args options {:project "."}]
     (if (empty? args) options
@@ -22,7 +25,9 @@
   (try
     (let [{:keys [project help?] :as options} (arguments args)]
       (if help?
-        (println "clojure -M:cli --project PATH [--source-root DIR ...] [--example-extension]\nPrint Source World index as EDN. No project code is executed.")
+        (println (str "clojure-system-browser " version
+                      "\nclojure -M:cli --project PATH [--source-root DIR ...] [--example-extension]"
+                      "\nPrint Source World index as EDN. No project code is executed."))
         (let [result (service/open-project project options)]
           (if (= :ok (:status result))
             (let [system (:value result)]

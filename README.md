@@ -84,6 +84,7 @@ java -version
 clojure -Sdescribe
 clojure -Srepro -M:test
 clojure -Srepro -M:cli --project examples/sample-project
+clojure -Srepro -M:cli --project examples/poly-sample-project
 clojure -Srepro -M:desktop --project examples/sample-project --example-extension
 clojure -Srepro -M:tui --project examples/sample-project --example-extension
 ```
@@ -107,7 +108,9 @@ alias and regenerate its launch cache once, without opening the terminal UI:
 clojure -Srepro -Sforce -M:tui --help
 ```
 
-This should print CSB help starting with `clojure -M:tui --project PATH`.
+This should print the application version and the CSB help starting with
+`clojure -M:tui --project PATH`. The version is the one declared in
+`csb.cli/version` and recorded in [CHANGELOG.md](CHANGELOG.md).
 If the launch cache also needs rebuilding when opening a project, place
 `-Sforce` before `-M:tui`. Do not change the `deps.edn` of the project you want
 to browse.
@@ -119,6 +122,16 @@ its dependencies or executing aliases. If no paths are provided, `src` and
 ```sh
 clojure -Srepro -M:tui --project /path/to/project --source-root src --source-root test
 ```
+
+In a Polylith workspace there is no top-level `src`. When the project contains
+a `workspace.edn` (or the older `.polylith` configuration), or both `components`
+and `bases` folders, and `deps.edn` declares no top-level `:paths`, the browser
+derives the conventional brick layout from the filesystem alone: every brick
+under `components` and `bases` contributes its `src` and `test`, `development`
+contributes `src` and `test`, and each project under `projects` contributes its
+rare `src`. `workspace.edn` and aliases are never executed; explicit
+`--source-root` options and `deps.edn` `:paths` still take precedence.
+`examples/poly-sample-project` is a minimal browsable workspace with that layout.
 
 Only roots within the project are accepted. Symbolic links, `target`, `.git`,
 caches and `node_modules` are ignored. `project.clj` is not evaluated.
@@ -263,6 +276,38 @@ The save example targets `discount`. Operations return
 A confirmed save returns `:written? true`, the revision and change data.
 A subsequent reindexing failure is reported separately as `:reindex-error`.
 
+## Releases
+
+Every `v*` tag (for example `v0.2.0`) runs a build-only GitHub Actions
+workflow ([ADR 012](docs/decisions/012-release-packaging.md)) that publishes
+two assets to [GitHub Releases](https://github.com/DevGiuDev/clojure-system-browser/releases):
+the TUI/CLI uberjar and the `csb` launcher script. The workflow runs no
+tests and makes no verification claims; checks stay local as recorded in
+`docs/verification.md`. To cut a release, verify locally and push the tag:
+
+```sh
+clojure -T:build uber
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+The jar runs the TUI (`csb.tui` is the main class) on Java 21 or later and
+contains no JavaFX: the Desktop still needs a JDK 25+ with this
+repository's JavaFX 27 dependencies and is not packaged. To install from a
+release, put both assets in a directory on `PATH`:
+
+```sh
+mkdir -p ~/.local/opt/csb && cd ~/.local/opt/csb
+curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.2.0/csb
+curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.2.0/clojure-system-browser-0.2.0.jar
+chmod +x csb
+export PATH="$HOME/.local/opt/csb:$PATH"
+csb --project /path/to/project
+```
+
+`csb` accepts the same options as `clojure -M:tui` (`--project`,
+`--source-root`, `--example-extension`) and honors `JAVA_CMD` to select the
+Java binary.
+
 ## Initial release limitations
 
 - Writing supports only a single unambiguous top-level `defn` or `defn-` in a
@@ -312,7 +357,7 @@ A subsequent reindexing failure is reported separately as `:reindex-error`.
 
 ```sh
 clojure -Srepro -M:test
-clj-kondo --lint src apps test test-desktop test-tui test-support deps.edn
+clj-kondo --lint src apps test test-desktop test-tui test-support deps.edn build.clj
 clojure -Srepro -M:tui:tui-test
 JAVA_CMD=/usr/lib/jvm/java-27-openjdk/bin/java clojure -Srepro -M:desktop:desktop-test
 ```
