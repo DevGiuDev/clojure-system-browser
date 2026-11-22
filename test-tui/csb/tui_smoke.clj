@@ -251,6 +251,7 @@
            (is (= (TextColor$Indexed. 114) (led "passing-test")))
            (is (= (TextColor$Indexed. 210) (led "failing-test")))
            (is (str/includes? (frame ui) "Configured suite command"))
+           (is (= (TextColor$Indexed. 210) (colour-at ui "FAIL shop.orders-test/failing-test")))
            (press! ui KeyType/F5)
            (fixture/await-state! state #(= :failed (get-in % [:test-runner :last-run :status])))
            (draw!)
@@ -259,6 +260,9 @@
            (press! ui KeyType/Enter)
            (is (= 'shop.orders-test (:namespace @state)))
            (is (str/includes? (frame ui) "deftest failing-test"))
+           (is (= (TextColor$Indexed. 210) (colour-at ui "Totals should match")))
+           (is (str/includes? (frame ui) "Expected: (= 1 2)"))
+           (is (= (TextColor$Indexed. 210) (colour-at ui "! ")))
            (is (= (TextColor$Indexed. 210) (led "shop.orders-test")))))))))
 
 (deftest source-syntax-is-coloured-in-both-themes-without-changing-the-draft

@@ -16,7 +16,7 @@
 
 (defn test-aliases [deps]
   (let [aliases (:aliases deps)]
-    (filterv #(map? (get aliases %)) [:test :tests :kaocha])))
+    (filterv #(map? (get aliases %)) [:test :tests :kaocha :lazytest])))
 
 (defn- paths [values]
   (when (sequential? values) values))

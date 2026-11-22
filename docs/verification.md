@@ -147,6 +147,41 @@ visually confirmed the themed window on Linux. The manual acceptance matrix
 - JDK 27 built the TUI uberjar with the child observer bundled. Manual
   client interaction remains pending.
 
+### Lazytest support (2026-11-22)
+
+A disposable copy of the [Lazytest sample project](../examples/lazytest-sample-project/README.md)
+used Lazytest 2.1.0 through the shared runner. The integration test
+exercised whole-suite, namespace and single-var runs, nested assertions,
+skipped suites, setup errors, source navigation, and the project's reporter
+and directory options. Core tests verified static discovery, navigation and
+read-only definitions.
+
+Running the example directly reported five cases and one intentional
+failure, with exit status 1. Excluding `demo-failure` reported four
+passing cases and exit status 0.
+
+On JDK 27, core passed 55 tests and 409 assertions, Live integration passed
+10 tests and 68 assertions, Desktop Headless passed 18 tests and 179
+assertions, and the virtual-terminal TUI passed 22 tests and 267 assertions.
+clj-kondo reported zero errors and warnings. Manual Lazytest interaction
+in the clients remains pending.
+
+### Test log and failure diagnostics (2026-11-22)
+
+Desktop Headless verified that the log receives more vertical space than
+the test lists and renders failing test names in red. The virtual-terminal
+TUI verified red failure rows in the log. Both clients opened a failing
+definition and displayed the assertion message, expected value and line
+marker. The integration suite exercised Lazytest failures, setup errors,
+Clojure test exceptions and an external edit that invalidates the line
+marker while keeping the failure details.
+
+In the isolated commit snapshot on JDK 27, core passed 55 tests and 409
+assertions, Live integration passed 10 tests and 76 assertions, Desktop
+Headless passed 17 tests and 170 assertions, and the virtual-terminal TUI
+passed 20 tests and 249 assertions.
+clj-kondo reported zero errors and warnings.
+
 ## Example nREPL launchers (2026-11-22)
 
 Started both example launchers concurrently from disposable project copies

@@ -40,7 +40,8 @@
                (def ^:dynamic *fixture* false)
                (t/use-fixtures :once (fn [run] (binding [*fixture* true] (run))))
                (t/deftest passing-test (t/is *fixture*))
-               (t/deftest failing-test (t/is (= 1 2)))")
+               (t/deftest failing-test
+                 (t/is (= 1 2) \"Totals should match\"))")
       (write! (.resolve root "test/shop/test_driver.clj")
               "(ns shop.test-driver (:require [clojure.test :as t] [shop.orders-test]))
                (defn -main [& _]

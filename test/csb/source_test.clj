@@ -188,6 +188,41 @@
       (let [system (:value (service/open-project root {:roots ["src"]}))]
         (is (empty? (:value (service/list-tests system))))))))
 
+(deftest lazytest-suites-are-indexed-without-loading-the-project
+  (with-project
+    {"deps.edn" "{:paths [\"src\"] :aliases {:lazytest {:extra-paths [\"spec\"] :main-opts [\"-m\" \"lazytest.main\"]}}}"
+     "src/demo.clj" "(ns demo) (defn total [] 42)"
+     "spec/demo_test.clj" "(ns demo-test (:require [lazytest.core :as lt :refer [defdescribe it]] [demo :as d]))
+                           (throw (Exception. \"must not run while indexing\"))
+                           (lt/defdescribe aliased (it \"nested\" (d/total)))
+                           (lazytest.core/defdescribe qualified)
+                           (defdescribe referred)
+                           (other/defdescribe unrelated)
+                           #_(defdescribe discarded)"
+     "spec/renamed_test.clj" "(ns renamed-test (:require [lazytest.core :refer [defdescribe] :rename {defdescribe suite}]))
+                              (suite renamed)
+                              (defdescribe no-longer-referred)"
+     "spec/shadowed_test.clj" "(ns shadowed-test
+                                (:refer-clojure :exclude [defn])
+                                (:require [lazytest.core :refer [defdescribe] :rename {defdescribe defn}]))
+                               (defn named-like-a-function)"
+     "spec/excluded_test.clj" "(ns excluded-test (:require [lazytest.core :refer :all :exclude [defdescribe]]))
+                               (defmacro defdescribe [& _] nil)
+                               (defdescribe excluded)"}
+    (fn [root]
+      (let [system (opened root)
+            suites (:value (service/list-tests system))
+            aliased (first (suites 'demo-test))
+            definition (first (:value (service/list-definitions system 'demo)))]
+        (is (= {'demo-test ['aliased 'qualified 'referred]
+                'renamed-test ['renamed]
+                'shadowed-test ['named-like-a-function]}
+               (update-vals suites #(mapv :name %))))
+        (is (false? (:writable? aliased)))
+        (is (false? (:writable? (first (suites 'shadowed-test)))))
+        (is (= ['aliased] (mapv :name (get-in (service/lookup-symbol system (:id definition) nil :tests)
+                                              [:value :matches]))))))))
+
 (deftest polylith-workspace-is-discovered-by-convention
   (with-project
     {"deps.edn" "{:aliases {:dev {:extra-paths [\"components/shop/src\" \"bases/worker/src\"]}}}"

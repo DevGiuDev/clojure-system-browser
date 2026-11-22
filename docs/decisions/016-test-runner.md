@@ -20,5 +20,9 @@ outcome. A namespace turns green once every indexed case reports a pass.
 An aborted namespace or a failed case turns its row red.
 
 The process reads saved files and leaves the application's nREPL session
-independent. Rerunning a set of failures and navigation to an exact
-assertion position remain open.
+independent. Failure events carry the first failure's diagnostic and location
+when the runner provides them. Both clients highlight failures in the log and
+show the diagnostic above the selected definition. A line highlight requires
+the reported location to fall within the definition and its file revision to
+match the source index. Rerunning a set of failures and jumping directly to
+an assertion remain open.

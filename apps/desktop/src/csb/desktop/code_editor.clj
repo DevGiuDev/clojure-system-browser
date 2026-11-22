@@ -28,17 +28,33 @@
   component/Component
   (instance [_] container))
 
+(defn- mark-lines! [^CodeArea area previous current style-class]
+  (let [total (.size (.getParagraphs area))]
+    (doseq [row (into (or previous #{}) current)
+            :when (< row total)]
+      (.setParagraphStyle area (int row) (if (contains? current row)
+                                          (Collections/singleton style-class)
+                                          (Collections/emptyList))))))
+
 (defn- sync-editor! [{:keys [^CodeArea area props updating?] :as editor} desc]
   (let [text (display-text (:text desc))
-        changed-document? (not= (:document-key @props) (:document-key desc))]
+        changed-document? (not= (:document-key @props) (:document-key desc))
+        changed-text? (or changed-document? (not= text (.getText area)))
+        log? (:log? desc)
+        previous (:error-rows @props)
+        current (:error-rows desc)]
     (reset! updating? true)
     (try
       (.setEditable area (boolean (:editable desc)))
-      (when (or changed-document? (not= text (.getText area)))
+      (when changed-text?
         (.replaceText area ^String text)
-        (.moveTo area (int 0))
+        (.moveTo area (int (if log? (.getLength area) 0)))
         (.forgetHistory (.getUndoManager area))
-        (highlight! area))
+        (if log?
+          (.requestFollowCaret area)
+          (highlight! area)))
+      (when (or changed-text? (not= previous current))
+        (mark-lines! area previous current (if log? "test-log-error" "test-failure-line")))
       (reset! props desc)
       (finally (reset! updating? false))))
   editor)
@@ -47,8 +63,8 @@
   (reify lifecycle/Lifecycle
     (create [_ desc _]
       (let [area (doto (CodeArea.)
-                   (.setId "definition-source")
-                   (.setWrapText false))
+                   (.setId (or (:id desc) "definition-source"))
+                   (.setWrapText (boolean (:log? desc))))
             container (VirtualizedScrollPane. area)
             props (atom {})
             updating? (atom false)
@@ -56,7 +72,7 @@
                                      (reify Consumer
                                        (accept [_ _]
                                          (when-not @updating?
-                                           (highlight! area)
+                                           (when-not (:log? @props) (highlight! area))
                                            (when-let [edit (:on-text-changed @props)]
                                              (let [text (.getText area)
                                                    saved (:saved-text @props)]

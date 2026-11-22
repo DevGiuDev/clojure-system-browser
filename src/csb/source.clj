@@ -154,32 +154,62 @@
                           (subs body start end)))))
         (drop 2 (when ns-node (reader-children (bare-node ns-node))))))
 
+(defn- namespace-libspecs [ns-node]
+  (for [clause (drop 2 (when ns-node (list-parts ns-node)))
+        :let [parts (list-parts clause)]
+        :when (= ":require" (some-> parts first n/string))
+        libspec (rest parts)
+        :when (= :vector (n/tag libspec))
+        :let [[target & options] (reader-children libspec)
+              target (leaf-symbol target)]
+        :when target]
+    [target (map (fn [[key value]] [(n/string key) value]) (partition 2 options))]))
+
+(defn- lazytest-refer [libspecs]
+  (some (fn [[target options]]
+          (when (= 'lazytest.core target)
+            (let [options (into {} options)
+                  refer (get options ":refer")
+                  rename (get options ":rename")
+                  mentions-macro? (fn [node]
+                                    (and (#{:vector :list :set} (some-> node n/tag))
+                                         (some #{'defdescribe} (map leaf-symbol (reader-children node)))))]
+              (when (and (not (mentions-macro? (get options ":exclude")))
+                         (or (= ":all" (some-> refer n/string)) (mentions-macro? refer)))
+                (or (when (= :map (some-> rename n/tag))
+                      (some (fn [[original local]]
+                              (when (= 'defdescribe (leaf-symbol original))
+                                (leaf-symbol local)))
+                            (partition 2 (reader-children rename))))
+                    'defdescribe)))))
+        libspecs))
+
 (defn- namespace-bindings [ns-node]
-  (reduce (fn [bindings [target option value]]
-            (case option
-              ":as" (if-let [alias (leaf-symbol value)]
-                      (-> bindings (assoc-in [:aliases alias] target)
-                          (assoc-in [:reader-aliases alias] target))
-                      bindings)
-              ":as-alias" (if-let [alias (leaf-symbol value)]
-                            (assoc-in bindings [:reader-aliases alias] target)
-                            bindings)
-              ":refer" (if (= :vector (n/tag value))
-                         (update bindings :refers into
-                                 (for [node (significant value) :let [sym (leaf-symbol node)] :when sym]
-                                   [sym target]))
-                         bindings)
-              bindings))
-          {:aliases {} :reader-aliases {} :refers {}}
-          (for [clause (drop 2 (when ns-node (list-parts ns-node)))
-                :let [parts (list-parts clause)]
-                :when (= ":require" (some-> parts first n/string))
-                libspec (rest parts)
-                :when (= :vector (n/tag libspec))
-                :let [items (significant libspec) target (leaf-symbol (first items))]
-                :when target
-                [key value] (partition 2 (rest items))]
-            [target (n/string key) value])))
+  (let [libspecs (namespace-libspecs ns-node)]
+    (reduce (fn [bindings [target option value]]
+              (case option
+                ":as" (if-let [alias (leaf-symbol value)]
+                        (-> bindings (assoc-in [:aliases alias] target)
+                            (assoc-in [:reader-aliases alias] target))
+                        bindings)
+                ":as-alias" (if-let [alias (leaf-symbol value)]
+                              (assoc-in bindings [:reader-aliases alias] target)
+                              bindings)
+                ":refer" (if (= :vector (n/tag value))
+                           (update bindings :refers into
+                                   (for [node (reader-children value) :let [sym (leaf-symbol node)] :when sym]
+                                     [sym target]))
+                           bindings)
+                bindings))
+            {:aliases {} :reader-aliases {} :refers {} :lazytest-refer (lazytest-refer libspecs)}
+            (for [[target options] libspecs [option value] options]
+              [target option value]))))
+
+(defn- lazytest-head? [{:keys [aliases lazytest-refer]} head]
+  (when head
+    (if-let [prefix (some-> head namespace symbol)]
+      (and (= "defdescribe" (name head)) (= 'lazytest.core (get aliases prefix prefix)))
+      (= head lazytest-refer))))
 
 (defn- symbol-children [node]
   (case (n/tag node)
@@ -231,11 +261,11 @@
   "Structural description of one significant top-level form, in file order.
    Comments and blank lines are not significant, so the ordinal matches the
    definition ids of the same revision. Never evaluates or resolves anything."
-  [body ordinal node definition-id]
+  [body bindings ordinal node definition-id]
   (let [parts (list-parts node)
         head (some-> parts first leaf-symbol)
         simple-head (when head (symbol (name head)))
-        kind (get known-heads simple-head)
+        kind (if (lazytest-head? bindings head) :test (get known-heads simple-head))
         {:keys [row col start]} (node-range body node)]
     {:ordinal ordinal :row row :col col
      :head head :name (some-> parts second leaf-symbol)
@@ -265,32 +295,34 @@
            (let [parts (list-parts node)
                  head (some-> parts first leaf-symbol)
                  simple-head (when head (symbol (name head)))
-                 kind (get known-heads simple-head)
+                 lazytest? (lazytest-head? bindings head)
+                 kind (if lazytest? :test (get known-heads simple-head))
                  sym (some-> parts second leaf-symbol)]
              (when (and kind sym)
                (let [r (node-range body node)
                      start (+ (:start r) (if bom? 1 0))
                      end (+ (:end r) (if bom? 1 0))
                      source (subs text start end)
-                     private? (private-definition? simple-head parts)
-                     writable? (and editable-document? (str/ends-with? (str file) ".clj")
+                     private? (private-definition? (if lazytest? 'defdescribe simple-head) parts)
+                     writable? (and (not lazytest?) editable-document? (str/ends-with? (str file) ".clj")
                                     (contains? writable-heads head))]
-                 {:id [(str file) ordinal] :file (str file) :namespace ns-sym
-                  :name sym :kind kind :private? private?
-                  :category (keyword (str (if private? "private-" "") (name kind) "s"))
-                  :location (select-keys r [:row :col :end-row :end-col])
-                  :range {:start start :end end} :source source :revision rev
-                  :writable? (boolean writable?)
-                  :read-only-reason (when-not writable?
-                                      (if (str/ends-with? (str file) ".cljd")
-                                        "ClojureDart (.cljd) is read-only; Save supports only top-level defn/defn- in .clj"
-                                        "Only unambiguous top-level defn/defn- in .clj are editable"))}))))
+                 (cond-> {:id [(str file) ordinal] :file (str file) :namespace ns-sym
+                          :name sym :kind kind :private? private?
+                          :category (keyword (str (if private? "private-" "") (name kind) "s"))
+                          :location (select-keys r [:row :col :end-row :end-col])
+                          :range {:start start :end end} :source source :revision rev
+                          :writable? (boolean writable?)
+                          :read-only-reason (when-not writable?
+                                              (if (str/ends-with? (str file) ".cljd")
+                                                "ClojureDart (.cljd) is read-only; Save supports only top-level defn/defn- in .clj"
+                                                "Only unambiguous top-level defn/defn- in .clj are editable"))}
+                   lazytest? (assoc :test-framework :lazytest))))))
          nodes)
         counts (frequencies (map (juxt :namespace :name) definitions))
         def-ordinals (set (map (comp second :id) definitions))
         forms (keep-indexed
                (fn [ordinal node]
-                 (form-entry body ordinal node
+                 (form-entry body bindings ordinal node
                              (when (contains? def-ordinals ordinal) [(str file) ordinal])))
                nodes)]
     {:file (str file) :namespace ns-sym :aliases (:reader-aliases bindings)

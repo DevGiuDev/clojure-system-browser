@@ -1,0 +1,6 @@
+{:paths ["src"]
+ :aliases
+ {:lazytest {:extra-paths ["spec"]
+             :extra-deps {io.github.noahtheduke/lazytest {:mvn/version "2.1.0"}}
+             :main-opts ["--report" "stderr" "-m" "lazytest.main"
+                         "--dir" "spec" "--exclude" "setup-error"]}}}

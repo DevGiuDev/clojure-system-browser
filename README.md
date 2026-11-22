@@ -364,14 +364,16 @@ test source** or Enter. Use `--source-root` for test paths outside the current
 index.
 
 Choose **Run suite** (F4), **Run namespace** (F5) or **Run test** (F6).
-Both examples work directly from Tests. CSB launches a process in the
+The sample projects work directly from Tests. CSB launches a process in the
 project directory and streams stdout and stderr into the results pane. Use
 PgUp/PgDn to scroll in the TUI or **Stop tests** (F7) to stop the process.
+In Desktop, drag the divider to resize the log.
 
 - For Clojure CLI, CSB uses the first configured `:main-opts` or `:exec-fn`
-  among `:test`, `:tests` and `:kaocha`. Kaocha and Cognitect runs use their native
-  selectors. For other aliases, scoped runs use `clojure.test` with the same test
-  classpath. A project with only test paths can run its indexed JVM tests.
+  among `:test`, `:tests`, `:kaocha` and `:lazytest`. Kaocha, Cognitect and Lazytest
+  runs use their native selectors. For other aliases, scoped runs use
+  `clojure.test` with the same test classpath. A Clojure CLI project with only
+  test paths can run its indexed `clojure.test` tests.
 - Leiningen projects use `lein test` with their normal test profiles and
   selectors. A `test` task in `bb.edn` can run as `bb test` and displays
   output and exit status.
@@ -381,6 +383,17 @@ red when it fails and gray when the runner supplies no conclusive result.
 Clojure CLI and Leiningen runs collect test events alongside the normal command output.
 A namespace turns green when every indexed test in it has a passing result.
 The dots also appear next to test namespaces in the main browser.
+The log highlights failures in red. Opening a failed test shows its first
+failure above the source, including expected and actual values when the runner
+reports them. CSB highlights the reported line when it matches the indexed
+definition.
+
+For a project alias that launches `lazytest.main`, **Run test** selects an
+indexed top-level `defdescribe` suite and reports the aggregate result of its
+nested cases. **Run namespace** selects the namespace. CSB uses the project's
+Lazytest dependency and configured test directories and reporters. Each launch
+runs once. Open the [Lazytest sample project](examples/lazytest-sample-project/README.md)
+to try passing, failing and skipped suites with Lazytest 2.1.0.
 
 ### Java VMs
 

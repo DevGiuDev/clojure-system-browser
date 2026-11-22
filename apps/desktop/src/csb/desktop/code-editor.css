@@ -16,3 +16,6 @@
 .code-area .syntax-delimiter { -fx-fill: -csb-muted; }
 .code-area .selection { -fx-fill: -csb-selection; }
 .code-area .caret { -fx-stroke: -csb-ink; }
+#test-details { -fx-font-size: 13px; }
+.code-area .test-log-error .text { -fx-fill: -csb-error; }
+.code-area .test-failure-line .text { -rtfx-background-color: -csb-error-surface; }

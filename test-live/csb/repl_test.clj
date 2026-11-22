@@ -1,5 +1,6 @@
 (ns csb.repl-test
-  (:require [clojure.java.io :as io]
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
             [clojure.string :as str]
             [clojure.test :as test :refer [deftest is testing]]
             [csb.repl :as repl]
@@ -245,6 +246,81 @@
       (is (= :passed (tests/case-status snapshot 'poly.sample.shop.components.invoice-test 'total-adds-prices)))
       (is (= 4 (count (filter #{:passed} (vals (get-in snapshot [:test-runner :cases])))))))))
 
+(deftest lazytest-runs-and-reports-suites-in-the-project-process
+  (let [sample (io/file "examples/lazytest-sample-project")
+        sample-config (edn/read-string (slurp (io/file sample "deps.edn")))
+        root (.toFile (Files/createTempDirectory "csb-lazytest-" (make-array FileAttribute 0)))
+        config (io/file root "deps.edn")
+        state (session/create)
+        orders-ns 'demo.orders-test
+        delivery-ns 'demo.delivery-test
+        write-project! (fn [args]
+                         (spit config
+                               (pr-str (assoc-in sample-config [:aliases :lazytest :main-opts]
+                                                 (into ["--report" "stderr" "-m" "lazytest.main"] args)))))]
+    (try
+      (doseq [path ["deps.edn" "src/demo/orders.clj"
+                    "spec/demo/orders_test.clj" "spec/demo/delivery_test.clj"]]
+        (let [file (io/file root path)]
+          (io/make-parents file)
+          (io/copy (io/file sample path) file)))
+      (spit (io/file root "spec/demo/legacy_test.clj")
+            "(ns demo.legacy-test (:require [clojure.test :refer [deftest is]]))
+             (deftest legacy (is false))")
+      (session/open! state root {})
+      (let [snapshot (run-project-tests! state nil nil)
+            run (tests/result snapshot)
+            tree (tests/targets snapshot)
+            subtotal (some #(when (= 'subtotal (:name %)) %) (tree orders-ns))]
+        (is (= :failed (:status run)) (pr-str run))
+        (is (= [:passed :failed :idle :idle]
+               (mapv #(tests/case-status snapshot orders-ns %)
+                     ['subtotal 'failure-example 'skipped-example 'setup-error-example])))
+        (is (= :passed (tests/case-status snapshot delivery-ns 'delivery-fee)))
+        (is (= :passed (tests/namespace-status snapshot delivery-ns (tree delivery-ns))))
+        (is (= :idle (tests/case-status snapshot 'demo.legacy-test 'legacy)))
+        (is (some #(str/includes? % "fails on purpose") (:output run)))
+        (let [failure (get (:failures run) [orders-ns 'failure-example])]
+          (is (= "fails on purpose with an incorrect subtotal" (:case failure)))
+          (is (= "(= 30 (orders/subtotal [10 15]))" (:expected failure)))
+          (is (pos-int? (:line failure))))
+        (tests/open-source! state subtotal)
+        (is (= [(:id subtotal) false]
+               ((juxt :id :writable?) (:definition @state)))))
+      (write-project! ["--namespace=demo.delivery-test" "-ndemo.delivery-test"
+                       "--var" "demo.orders-test/failure-example" "-vdemo.orders-test/failure-example"
+                       "--watch" "--output" "dots" "--" "spec"])
+      (let [snapshot (run-project-tests! state orders-ns 'subtotal)
+            run (tests/result snapshot)
+            output (str/join "\n" (:output run))]
+        (is (= :passed (:status run)) (pr-str run))
+        (is (= :passed (tests/case-status snapshot orders-ns 'subtotal)))
+        (is (str/includes? output "Ran 2 test cases"))
+        (is (not (str/includes? output "fails on purpose"))))
+      (write-project! ["--dir" "spec" "--namespace" "demo.delivery-test"
+                       "--exclude" "demo-failure" "--exclude" "setup-error"])
+      (let [snapshot (run-project-tests! state orders-ns nil)]
+        (is (= :passed (:status (tests/result snapshot))) (pr-str (tests/result snapshot)))
+        (is (= :idle (tests/case-status snapshot orders-ns 'skipped-example)))
+        (is (str/includes? (str/join "\n" (:output (tests/result snapshot))) "Ran 2 test cases")))
+      (write-project! ["--dir" "spec"])
+      (let [snapshot (run-project-tests! state orders-ns 'setup-error-example)
+            run (tests/result snapshot)]
+        (is (= :failed (:status run)) (pr-str run))
+        (is (= :error (tests/case-status snapshot orders-ns 'setup-error-example)))
+        (is (some-> (get-in run [:failures [orders-ns 'setup-error-example] :message])
+                    (str/includes? "Intentional setup error")))
+        (is (some #(str/includes? % "Intentional setup error") (:output run))))
+      (let [file (io/file root "spec/demo/orders_test.clj")]
+        (spit file (str "\n" (slurp file)))
+        (let [snapshot (run-project-tests! state orders-ns 'failure-example)
+              failure (get-in (tests/result snapshot) [:failures [orders-ns 'failure-example]])]
+          (is (= :failed (:status failure)))
+          (is (= "(= 30 (orders/subtotal [10 15]))" (:expected failure)))
+          (is (nil? (:line failure)))))
+      (finally
+        (doseq [file (reverse (file-seq root))] (io/delete-file file true))))))
+
 (defn- lein-executable? []
   (when-let [process (try (.start (ProcessBuilder. ^java.util.List ["lein" "version"]))
                           (catch IOException _ nil))]
@@ -270,7 +346,8 @@
           (spit (io/file root "test/demo/bad_test.clj")
                 "(ns demo.bad-test (:require [clojure.test :refer [deftest is]]))
                  (deftest passing-check (is true))
-                 (deftest failed-check (is (= 1 2)))")
+                 (deftest failed-check (is (= 1 2)))
+                 (deftest raised (throw (ex-info \"Deliberate test exception\" {})))")
           (spit (io/file root "test/demo/fixture_test.clj")
                 "(ns demo.fixture-test (:require [clojure.test :refer [deftest is use-fixtures]]))
                  (use-fixtures :once (fn [f] (f) (throw (ex-info \"Teardown failed\" {}))))
@@ -282,6 +359,8 @@
           (is (= :failed (:status run)) (pr-str run))
           (is (= :passed (tests/case-status snapshot 'demo.good-test 'profile-injection)))
           (is (= :failed (tests/case-status snapshot 'demo.bad-test 'failed-check)))
+          (is (= "Deliberate test exception"
+                 (get-in run [:failures ['demo.bad-test 'raised] :message])))
           (is (= :passed (tests/namespace-status snapshot 'demo.good-test (tree 'demo.good-test))))
           (is (= :failed (tests/namespace-status snapshot 'demo.fixture-test (tree 'demo.fixture-test))))
           (is (some #(str/includes? % "lein test :only demo.bad-test/failed-check") (:output run))))

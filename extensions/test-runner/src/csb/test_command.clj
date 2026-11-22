@@ -9,6 +9,12 @@
       (symbol (str (get ns-aliases (symbol prefix) prefix)) (name exec-fn))
       (when ns-default (symbol (str ns-default) (name exec-fn))))))
 
+(defn- main-entry [options]
+  (loop [index 0 [flag value & remaining] options]
+    (cond
+      (#{"-i" "--init" "-e" "--eval" "--report"} flag) (recur (+ index 2) remaining)
+      (and value (#{"-m" "--main"} flag)) {:module value :args-index (+ index 2)})))
+
 (defn detect [^Path root indexed?]
   (let [deps (config/read-config root "deps.edn")
         aliases (:aliases deps)
@@ -20,7 +26,8 @@
                             (cond
                               (and (sequential? opts) (seq opts) (every? string? opts))
                               {:driver :main :main (vec opts) :aliases [id]
-                               :runner (some {"kaocha.runner" :kaocha "cognitect.test-runner" :cognitect} opts)}
+                               :runner ({"kaocha.runner" :kaocha "cognitect.test-runner" :cognitect
+                                         "lazytest.main" :lazytest} (:module (main-entry opts)))}
                               exec
                               {:driver :exec :exec exec :aliases [id]
                                :runner ({'cognitect.test-runner.api/test :cognitect} exec)})))
@@ -41,25 +48,54 @@
 (defn- qualified-target [ns-sym test-sym]
   (when test-sym (symbol (str ns-sym) (name test-sym))))
 
+(defn- option-name [arg]
+  (first (str/split arg #"=" 2)))
+
+(defn- remove-selectors [args selectors]
+  (loop [argv [] args (seq args)]
+    (if-let [arg (first args)]
+      (cond
+        (= "--" arg) (into argv args)
+        (contains? selectors (option-name arg))
+        (recur argv (if (str/includes? arg "=") (next args) (nnext args)))
+        (and (> (count arg) 2) (contains? selectors (subs arg 0 2)))
+        (recur argv (next args))
+        :else (recur (conj argv arg) (next args)))
+      argv)))
+
 (defn- remove-scope-options [options runner]
-  (let [[module selectors] (case runner
-                             :kaocha ["kaocha.runner" #{"--focus" "--focus-meta"}]
-                             :cognitect ["cognitect.test-runner"
-                                         #{"-n" "--namespace" "-r" "--namespace-regex" "-v" "--var"}])
-        [launcher args] (split-at (inc (.indexOf ^java.util.List options module)) options)]
-    (loop [argv (vec launcher) args (seq args)]
-      (if-let [arg (first args)]
-        (let [[flag inline] (str/split arg #"=" 2)]
-          (if (contains? selectors flag)
-            (recur argv (if inline (next args) (nnext args)))
-            (recur (conj argv arg) (next args))))
-        argv))))
+  (let [selectors (case runner
+                    :kaocha #{"--focus" "--focus-meta"}
+                    :cognitect #{"-n" "--namespace" "-r" "--namespace-regex" "-v" "--var"})
+        [launcher args] (split-at (:args-index (main-entry options)) options)]
+    (into (vec launcher) (remove-selectors args selectors))))
+
+(defn- lazytest-options [main ns-sym test-id]
+  (let [[launcher args] (split-at (:args-index (main-entry main)) main)
+        [options paths] (split-with #(not= "--" %) args)
+        options (remove #(= "--watch" (option-name %)) options)
+        options (if ns-sym
+                  (remove-selectors options #{"-n" "--namespace" "-v" "--var"})
+                  options)]
+    (into (vec launcher)
+          (concat options
+                  (when-not (some #(= "--output" (option-name %)) options)
+                    ["--output" "nested"])
+                  ["--output" "csb.test-worker/report-lazytest"]
+                  (cond test-id ["--var" (str test-id)]
+                        ns-sym ["--namespace" (str ns-sym)])
+                  paths))))
 
 (defn- clojure-opts [{:keys [driver runner main exec]} root temp ns-sym test-sym namespaces]
   (let [test-id (qualified-target ns-sym test-sym)
         native? (or (nil? ns-sym) runner)
         load-worker ["-i" (str (.resolve ^Path temp "csb/test_worker.clj"))]]
     (cond
+      (= :lazytest runner)
+      {:mode :main
+       :alias {:main-opts (into load-worker (lazytest-options main ns-sym test-id))}
+       :environment {"CSB_TEST_RUNNER" "lazytest"}}
+
       (and native? (= :exec driver))
       {:mode :exec
        :alias (cond-> {:exec-fn 'csb.test-worker/exec}

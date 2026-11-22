@@ -7,8 +7,10 @@
             [csb.java-vm :as java-vm]
             [csb.service :as service]
             [csb.session :as session]
+            [csb.source :as source]
             [csb.test-command :as command])
-  (:import [java.nio.file Files Path]
+  (:import [java.io InputStream]
+           [java.nio.file Files LinkOption OpenOption Path]
            [java.nio.file.attribute FileAttribute]
            [java.util UUID]))
 
@@ -76,7 +78,49 @@
     :cancelled "Cancelled" :unavailable "Unavailable" "Not run"))
 
 (defn result [state]
-  (get-in state [:test-runner :last-run]))
+  (when-let [run (get-in state [:test-runner :last-run])]
+    (assoc run :failures (select-keys (get-in state [:test-runner :failures]) (:targets run)))))
+
+(defn- plain-output [text]
+  (str/replace text #"\u001b\[[0-?]*[ -/]*[@-~]" ""))
+
+(defn- failure-description [{:keys [case message expected actual]}]
+  (let [parts (keep identity [(some-> case plain-output)
+                              (some-> message plain-output)
+                              (when expected (str "Expected: " (plain-output expected)))
+                              (when actual (str "Actual: " (plain-output actual)))])]
+    (if (seq parts) (str/join " · " parts) "See the test log for details.")))
+
+(defn log-lines [{:keys [output failures]}]
+  (into (mapv (fn [line]
+                (let [text (plain-output line)]
+                  {:text text
+                   :error? (boolean
+                            (or (re-find #"\u001b\[(?:\d+;)*(?:31|91)(?:;\d+)*m" line)
+                                (re-find #"(?i)^\s*(?:FAIL in\b|ERROR in\b|Execution error\b|Exception in thread\b|×|[1-9]\d* (?:failure|error)s?\b)"
+                                         text)))}))
+              output)
+        (map (fn [[[ns-sym test-sym] {:keys [status] :as failure}]]
+               {:text (str (if (= :error status) "ERROR " "FAIL ")
+                           ns-sym "/" test-sym " · " (failure-description failure))
+                :error? true}))
+        (sort-by (comp str key) failures)))
+
+(defn- source-identity [definition]
+  (select-keys definition [:id :revision]))
+
+(defn source-failure [state {:keys [namespace name location] :as definition}]
+  (when-let [{:keys [source status file line] :as failure}
+             (get-in state [:test-runner :failures [namespace name]])]
+    (when (= source (source-identity definition))
+      (let [path (str/replace (:file definition) "\\" "/")
+            reported (some-> file (str/replace "\\" "/"))
+            row (when (and reported (or (= path reported) (str/ends-with? path (str "/" reported)))
+                           line (<= (:row location) line (:end-row location)))
+                  (- line (:row location)))]
+        {:heading (str (status-label status) (when row (str " · Line " line)))
+         :description (failure-description failure)
+         :row row}))))
 
 (defn result-label [{:keys [status command exit message java-home]}]
   (if status
@@ -99,32 +143,66 @@
   (let [lines (conj (or lines []) (subs line 0 (min 4096 (count line))))]
     (if (> (count lines) 400) (vec (take-last 400 lines)) lines)))
 
+(defn- failure-fields [details]
+  (when (map? details)
+    (into (if (pos-int? (:line details)) {:line (:line details)} {})
+          (keep (fn [key]
+                  (let [value (get details key)]
+                    (when (and (string? value) (<= (count value) 1024) (not (str/blank? value)))
+                      [key (str/replace value #"\r\n?|\n" " ")]))))
+          [:file :case :message :expected :actual])))
+
 (defn- read-event [line prefix]
-  (when (str/starts-with? line prefix)
+  (when (and (<= (count line) 8192) (str/starts-with? line prefix))
     (try
-      (let [[[ns-name test-name] status :as event] (edn/read-string (subs line (count prefix)))]
-        (when (and (vector? event) (= 2 (count event)) (string? ns-name)
+      (let [[[ns-name test-name :as id] status details :as event] (edn/read-string (subs line (count prefix)))]
+        (when (and (vector? event) (<= 2 (count event) 3) (vector? id) (= 2 (count id)) (string? ns-name)
                    (or (nil? test-name) (string? test-name))
                    (#{:running :passed :failed :error :unavailable} status))
-          [[(symbol ns-name) (some-> test-name symbol)] status]))
+          [[(symbol ns-name) (some-> test-name symbol)] status (failure-fields details)]))
       (catch Exception _ nil))))
 
+(defn- record-failure [runner target status details]
+  (assoc-in runner [:failures target]
+            (assoc details :status status
+                   :source (get-in runner [:last-run :source-identities target]))))
+
+(defn- checked-location [state run-id target details]
+  (if (:line details)
+    (let [{:keys [id source-identities]} (get-in state [:test-runner :last-run])
+          {[file] :id :keys [revision]} (get source-identities target)
+          current? (and (= id run-id) file
+                        (try
+                          (let [path (source/path file)]
+                            (when (Files/isRegularFile path (into-array LinkOption [LinkOption/NOFOLLOW_LINKS]))
+                              (with-open [^InputStream input
+                                          (Files/newInputStream path (into-array OpenOption [LinkOption/NOFOLLOW_LINKS]))]
+                                (= revision (source/revision (.readAllBytes input))))))
+                          (catch Exception _ false)))]
+      (if current? details (dissoc details :line :file)))
+    details))
+
 (defn- record-line! [state id prefix line]
-  (if-let [[[ns-sym test-sym :as target] status] (read-event line prefix)]
-    (update-current! state id
-                     (fn [runner]
-                       (let [previous (get-in runner [:cases target])]
-                         (cond-> runner
-                           (contains? (get-in runner [:last-run :targets]) target)
-                           (assoc-in [:cases target] (if (and (#{:failed :error} previous) (not= :error status))
-                                                      previous status))
-                           (nil? test-sym)
-                           (update-in [:last-run :active-namespaces]
-                                      (if (= :running status) (fnil conj #{}) disj) ns-sym)
-                           (and (nil? test-sym) (#{:error :failed} status))
-                           (update :namespace-errors (fnil conj #{}) ns-sym)
-                           (= "" (peek (get-in runner [:last-run :output])))
-                           (update-in [:last-run :output] pop)))))
+  (if-let [[[ns-sym test-sym :as target] status details] (read-event line prefix)]
+    (let [details (checked-location @state id target details)]
+      (update-current! state id
+                       (fn [runner]
+                         (let [previous (get-in runner [:cases target])
+                               targeted? (contains? (get-in runner [:last-run :targets]) target)]
+                           (cond-> runner
+                             targeted?
+                             (assoc-in [:cases target] (if (and (#{:failed :error} previous) (not= :error status))
+                                                        previous status))
+                             (and targeted? (#{:failed :error} status)
+                                  (or (= :error status) (nil? (get-in runner [:failures target]))))
+                             (record-failure target status details)
+                             (nil? test-sym)
+                             (update-in [:last-run :active-namespaces]
+                                        (if (= :running status) (fnil conj #{}) disj) ns-sym)
+                             (and (nil? test-sym) (#{:error :failed} status))
+                             (update :namespace-errors (fnil conj #{}) ns-sym)
+                             (= "" (peek (get-in runner [:last-run :output])))
+                             (update-in [:last-run :output] pop))))))
     (update-current! state id #(update-in % [:last-run :output] append-output line))))
 
 (defn- kill! [^Process process]
@@ -139,30 +217,49 @@
     (when-let [process (get-in next [:test-runner :last-run :process])]
       (kill! process))))
 
+(defn- abort-message [output]
+  (let [lines (mapv plain-output output)
+        index (last (keep-indexed #(when (re-find #"^(?:Execution error|Exception in thread)\b" %2) %1) lines))]
+    (when index
+      (let [reason (some #(when-not (str/blank? %) %) (subvec lines (inc index)))
+            message (if (and reason (not (str/starts-with? reason "Full report at:")))
+                      (str (lines index) " " reason)
+                      (lines index))]
+        (subs message 0 (min (count message) 512))))))
+
 (defn- complete! [state id {:keys [exit status] :as result}]
   (update-current!
    state id
    (fn [runner]
-     (let [{:keys [cancel? targets scope monitored? active-namespaces]} (:last-run runner)
+     (let [{:keys [cancel? targets scope monitored? active-namespaces]
+            framework :runner} (:last-run runner)
            [namespace-name test-name] scope
+           lazytest? (= :lazytest framework)
            statuses (map #(get-in runner [:cases %]) targets)
            observed (some #{:passed :failed :error} statuses)
            missing? (and monitored? (seq targets)
-                         (or (nil? observed) (and namespace-name (not-every? #{:passed} statuses))))
+                         (or (nil? observed)
+                             (and namespace-name (not lazytest?) (not-every? #{:passed} statuses))))
            status (cond cancel? :cancelled
                         status status
                         (or (not (zero? exit)) (some #{:failed :error} statuses)) :failed
                         missing? :unavailable
                         :else :passed)
            pending (filter #(= :running (get-in runner [:cases %])) targets)
+           aborted? (and lazytest? (#{:error :failed} status))
            errored-namespaces (when (#{:error :failed} status)
                                 (cond-> (set active-namespaces)
                                   (and namespace-name (nil? test-name)) (conj namespace-name)))]
-       (cond-> (-> runner
-                   (update :cases #(apply dissoc % pending))
+       (cond-> (-> (if (and aborted? (seq pending))
+                     (let [message (or (:message result) (abort-message (get-in runner [:last-run :output])))]
+                       (reduce #(record-failure %1 %2 :error (when message {:message message})) runner pending))
+                     runner)
+                   (update :cases #(if aborted?
+                                     (into % (map (fn [target] [target :error])) pending)
+                                     (apply dissoc % pending)))
                    (update :last-run #(-> %
                                           (merge result {:status status})
-                                          (dissoc :process :cancel? :active-namespaces))))
+                                          (dissoc :process :cancel? :active-namespaces :source-identities))))
          (= :unavailable status)
          (assoc-in [:last-run :message] "Some selected tests did not report a result.")
          (and (not monitored?) (seq targets) (#{:passed :failed} status))
@@ -213,21 +310,32 @@
   (let [snapshot @state
         root (test-root snapshot)
         tree (targets snapshot)
-        namespaces (sort-by str (keys tree))
-        descriptor (when root (command/detect root (seq tree)))
-        definitions (if ns-sym (get tree ns-sym) (mapcat val tree))
-        affected (into #{} (comp (filter #(or (nil? test-sym) (= test-sym (:name %))))
-                                 (map (juxt :namespace :name)))
-                       definitions)
+        definitions (mapcat val tree)
+        descriptor (when root (command/detect root (some #(nil? (:test-framework %)) definitions)))
+        framework (when (= :lazytest (:runner descriptor)) :lazytest)
+        supported (filter #(= framework (:test-framework %)) definitions)
+        namespaces (sort-by str (distinct (map :namespace supported)))
+        selected? (some #(and (= ns-sym (:namespace %))
+                              (or (nil? test-sym) (= test-sym (:name %)))) definitions)
+        matched (group-by (juxt :namespace :name)
+                          (filter #(and (or (nil? ns-sym) (= ns-sym (:namespace %)))
+                                        (or (nil? test-sym) (= test-sym (:name %))))
+                                  supported))
+        affected (set (keys matched))
         run? (and (command/supports-scope? descriptor ns-sym) (or (nil? ns-sym) (seq affected)))
         id (str (UUID/randomUUID))
         run (if run?
               {:id id :status :running :scope [ns-sym test-sym] :targets affected :output []
+               :runner (:runner descriptor)
+               :source-identities (into {} (keep (fn [[target [definition duplicate]]]
+                                                   (when-not duplicate [target (source-identity definition)])))
+                                        matched)
                :monitored? (not= :bb (:driver descriptor))}
               {:id id :status :unavailable
                :message (cond
                           (nil? descriptor) "No test command or indexed JVM tests found."
                           (seq affected) "The configured command only supports suite runs."
+                          selected? "The configured command does not run the selected tests."
                           :else "Select an indexed test namespace or test.")})
         [_ next] (swap-vals!
                   state
@@ -238,6 +346,7 @@
                                   (assoc-in [:test-runner :last-run] run)
                                   (assoc-in [:tests-view :detail-scroll] 0))
                         run? (update-in [:test-runner :cases] #(apply dissoc % affected))
+                        run? (update-in [:test-runner :failures] #(apply dissoc % affected))
                         run? (update-in [:test-runner :namespace-errors]
                                         #(if ns-sym (disj % ns-sym) #{}))))))]
     (when (and run? (= id (get-in next [:test-runner :last-run :id])))

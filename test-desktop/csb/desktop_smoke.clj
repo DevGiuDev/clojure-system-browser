@@ -11,12 +11,13 @@
            [javafx.application Platform]
            [javafx.event Event]
            [javafx.scene.control Button ComboBox ContextMenu Label ListCell ListView MenuItem TextArea TextField]
+           [javafx.scene.layout Region]
            [javafx.scene.input ContextMenuEvent KeyCode KeyEvent]
            [javafx.scene.paint Color]
            [javafx.scene.shape SVGPath]
            [javafx.scene.text Text]
            [javafx.stage Stage Window WindowEvent]
-           [org.fxmisc.richtext CodeArea]))
+           [org.fxmisc.richtext CodeArea TextExt]))
 
 (defn- await! [pending]
   (let [value (deref pending 15000 ::timeout)]
@@ -208,16 +209,16 @@
          (let [led (fn [selector label]
                      (let [stage (sync! ui)]
                        (fx! (fn []
-                              (let [root (.getRoot (.getScene stage))
-                                    ^ListView list (node stage selector)]
+                              (let [root (.getRoot (.getScene stage))]
                                 (.applyCss root)
                                 (.layout root)
-                                (some (fn [^ListCell cell]
-                                        (when (= label (.getText cell))
-                                          (when-let [graphic (.getGraphic cell)]
-                                            [(some-> ^SVGPath (.lookup graphic ".icon-stroke") .getStroke)
-                                             (.getAccessibleText cell)])))
-                                      (.lookupAll list ".list-cell")))))))]
+                                (let [^ListView list (node stage selector)]
+                                  (some (fn [^ListCell cell]
+                                          (when (= label (.getText cell))
+                                            (when-let [graphic (.getGraphic cell)]
+                                              [(some-> ^SVGPath (.lookup graphic ".icon-stroke") .getStroke)
+                                               (.getAccessibleText cell)])))
+                                        (.lookupAll list ".list-cell"))))))))]
            (is (= [(Color/web "#51645f") "passing-test · Not run"] (led "#test-definitions" "passing-test")))
            (fire! ui "Run suite")
            (is (= [(Color/web "#754500") "shop.orders-test · Running"] (led "#test-namespaces" "shop.orders-test")))
@@ -231,10 +232,35 @@
            (is (= [(Color/web "#9e2d35") "failing-test · Failed"] (led "#test-definitions" "failing-test")))
            (is (= [(Color/web "#9e2d35") "shop.orders-test · Failed"] (led "#test-namespaces" "shop.orders-test")))
            (let [stage (sync! ui)
-                 output (fx! #(.getText ^TextArea (node stage "#test-details")))]
+                 output (fx! #(.getText ^CodeArea (node stage "#test-details")))]
              (is (str/includes? output "Configured suite command"))
              (is (str/includes? output "Suite stderr"))
-             (is (str/includes? output "1 failures, 0 errors")))
+             (is (str/includes? output "1 failures, 0 errors"))
+             (fx! (fn []
+                    (let [root (.getRoot (.getScene stage))
+                          log (node stage "#test-details")]
+                      (.applyCss root)
+                      (.layout root)
+                      (is (> (.getHeight ^Region log) (.getHeight ^ListView (node stage "#test-definitions"))))
+                      (is (some #(and (instance? Text %)
+                                      (str/includes? (.getText ^Text %) "shop.orders-test/failing-test")
+                                      (= (Color/web "#9e2d35") (.getFill ^Text %)))
+                                (.lookupAll log ".test-log-error .text")))))))
+           (select! ui "#test-definitions" "failing-test")
+           (fire! ui "Open test source")
+           (is (str/includes? (source ui) "deftest failing-test"))
+           (let [stage (sync! ui)]
+             (fx! (fn []
+                    (let [notice ^Label (node stage "#test-failure")
+                          editor ^CodeArea (node stage "#definition-source")]
+                      (is (some-> notice .getText (str/includes? "Totals should match")))
+                      (is (some-> notice .getText (str/includes? "Expected: (= 1 2)")))
+                      (is (some #{"test-failure-line"} (.getParagraphStyle (.getParagraph editor 1))))
+                      (doto (.getRoot (.getScene stage)) .applyCss .layout)
+                      (is (some #(and (instance? TextExt %)
+                                      (= (Color/web "#fde9ea") (.getBackgroundColor ^TextExt %)))
+                                (.lookupAll editor ".test-failure-line .text")))))))
+           (fire! ui "Tests")
            (select! ui "#test-definitions" "passing-test")
            (fire! ui "Run test")
            (fixture/await-state! state #(= :passed (get-in % [:test-runner :last-run :status])))
@@ -243,6 +269,8 @@
            (fire! ui "Open test source")
            (is (= 'shop.orders-test (:namespace @state)))
            (is (str/includes? (source ui) "deftest passing-test"))
+           (let [stage (sync! ui)]
+             (is (nil? (fx! #(node stage "#test-failure")))))
            (is (= [(Color/web "#9e2d35") "shop.orders-test · Failed"] (led "#namespaces" "shop.orders-test")))))))))
 
 (deftest repl-panel-preserves-the-source-draft-and-validates-the-port

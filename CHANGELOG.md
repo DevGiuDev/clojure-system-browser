@@ -6,6 +6,21 @@ version lives in `csb.cli/version` and is kept in sync with this file
 manually ([ADR 011](docs/decisions/011-versioning-changelog.md)). While the
 project is 0.x, minor bumps carry features and the MVP stays free to evolve.
 
+## [Unreleased]
+
+### Added
+
+- Desktop and TUI support Lazytest suites, with source navigation, scoped runs
+  and results for each `defdescribe`. The
+  [Lazytest sample project](examples/lazytest-sample-project/README.md) shows
+  passing, failing and skipped suites.
+
+### Changed
+
+- The Tests log has more space and highlights failures in red. Opening a
+  failed test shows its first failure above the source and marks the reported
+  line when it matches the indexed definition.
+
 ## [0.3.1] - 2026-11-22
 
 ### Added

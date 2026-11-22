@@ -15,12 +15,12 @@
 ;; Indices above the terminal's configurable ANSI 0–15 palette. No default colours.
 (def ^:private themes
   {:dark {:background 234 :surface 235 :raised 237 :text 253 :muted 248
-          :accent 81 :selection 24 :selected-text 231 :border 240 :warning 221 :error 210
+          :accent 81 :selection 24 :selected-text 231 :border 240 :warning 221 :error 210 :error-surface 52
           :special 81 :keyword 183 :string 150 :comment 246 :number 215
           :literal 209 :character 150 :delimiter 248 :reader 180
           :test-idle 248 :test-passed 114 :test-failed 210 :test-running 215}
    :light {:background 255 :surface 254 :raised 253 :text 234 :muted 240
-           :accent 24 :selection 24 :selected-text 231 :border 245 :warning 58 :error 124
+           :accent 24 :selection 24 :selected-text 231 :border 245 :warning 58 :error 124 :error-surface 224
            :special 24 :keyword 90 :string 22 :comment 240 :number 94
            :literal 124 :character 22 :delimiter 240 :reader 94
            :test-idle 240 :test-passed 28 :test-failed 124 :test-running 130}})
@@ -188,32 +188,54 @@
 (defn- list-rows [height]
   (max 1 (min 9 (quot (- height 10) 2))))
 
-(defn page-size [height]
+(defn- source-failure [state]
+  (when-not (or (:help? state) (:diagnostics? state) (:source-order? state)
+                (:editor-error state) (= :requires (:category state)))
+    (tests/source-failure state (:definition state))))
+
+(defn- failure-lines [width failure]
+  (when failure
+    (take 3 (TerminalTextUtils/getWordWrappedText
+             (max 1 (- width 2))
+             (into-array String [(str (:heading failure) " · " (:description failure))])))))
+
+(defn page-size [height width state]
   ;; A page must not skip details when the source panel is shorter than eight rows.
-  (max 1 (min 8 (- height (+ 6 (list-rows height)) 3))))
+  (max 1 (min 8 (- height (+ 6 (list-rows height)) 3
+                   (count (failure-lines width (source-failure state)))))))
 
 (defn- source! [g palette width height rows state]
   (let [top (+ 6 rows)
+        failure (source-failure state)
+        notices (failure-lines width failure)
         title (cond (:help? state) "Help" (:diagnostics? state) "Source diagnostics"
                     (:source-order? state) "Source order · Esc: source"
                     (:editor-error state) "External editor failed · Esc: source"
                     (= :requires (:category state)) "Requires · read only"
                     :else (or (get-in state [:definition :name]) "Source"))]
     (bar! g palette width (dec top)
-          (cond (:editor-error state) :error (:dirty? state) :warning :else :accent) :raised
+          (cond (or failure (:editor-error state)) :error (:dirty? state) :warning :else :accent) :raised
           (str title
                (when (get-in state [:definition :writable?]) " · e: external editor")
                (when (:dirty? state) " · UNSAVED")))
-    (style! g palette :text :background)
+    (doseq [[i notice] (map-indexed vector notices)]
+      (bar! g palette width (+ top i) :error :error-surface notice))
     (let [code? (not (or (:help? state) (:diagnostics? state) (:source-order? state) (:editor-error state)))
+          start (get state :scroll 0)
+          top (+ top (count notices))
           text (or (content state width) "")
           lines (if code? (code-lines text) (str/split-lines text))]
       (doseq [[i line] (map-indexed vector
                                    (take (max 0 (- height top 3))
-                                         (drop (get state :scroll 0) lines)))]
-        (if code?
-          (code-line! g palette width (+ top i) line)
-          (text! g width 2 (+ top i) line))))))
+                                         (drop start lines)))]
+        (let [y (+ top i)
+              marked? (= (+ start i) (:row failure))]
+          (if marked?
+            (bar! g palette width y :error :error-surface "!")
+            (style! g palette :text :background))
+          (if code?
+            (code-line! g palette width y line)
+            (text! g width 2 y line)))))))
 
 (defn repl-page-size [height] (max 1 (- height 11)))
 
@@ -329,15 +351,19 @@
           (style! g palette fg bg))
         (text! g right (+ left (if status 5 3)) y (label item))))))
 
-(defn- test-list-rows [height] (max 2 (quot (- height 9) 2)))
+(defn- test-list-rows [height] (max 2 (quot (- height 8) 3)))
 
 (defn test-detail-page-size [height] (max 1 (- height (test-list-rows height) 8)))
 
 (defn test-detail-lines [width result]
-  (vec (TerminalTextUtils/getWordWrappedText
-        (max 1 (- width 2))
-        (into-array String (mapcat #(str/split (str/replace % "\r" "") #"\n" -1)
-                                  (:output result))))))
+  (into []
+        (mapcat (fn [{:keys [text] :as line}]
+                  (if (empty? text)
+                    [line]
+                    (map #(assoc line :text %)
+                         (TerminalTextUtils/getWordWrappedText
+                          (max 1 (- width 2)) (into-array String [text]))))))
+        (tests/log-lines result)))
 
 (defn- tests-panel! [g palette width height state tree]
   (let [rows (test-list-rows height)
@@ -356,11 +382,11 @@
                 ns-sym str #(tests/namespace-status state % (get tree %)) (not test-focus?))
     (test-list! g palette mid width rows "Tests" definitions
                 selected (comp str :name) #(tests/case-status state ns-sym (:name %)) test-focus?)
-    (bar! g palette width summary-y :text :raised
+    (bar! g palette width summary-y (if (#{:failed :error} (:status result)) :error :text) :raised
           (tests/result-label result))
-    (style! g palette :text :background)
-    (doseq [[row line] (map-indexed vector (take page (drop start lines)))]
-      (text! g width 1 (+ summary-y row 1) line))
+    (doseq [[row {:keys [text error?]}] (map-indexed vector (take page (drop start lines)))]
+      (style! g palette (if error? :error :text) :background)
+      (text! g width 1 (+ summary-y row 1) text))
     (when (:dirty? state)
       (bar! g palette width (- height 3) :warning :background
             "Unsaved changes · Save or Discard before opening test source"))

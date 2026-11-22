@@ -136,28 +136,32 @@
         selected (tests/selected-test state definitions)
         test-sym (:name selected)
         result (tests/result state)
+        lines (tests/log-lines result)
         running? (tests/active? state)
         [tone icon] (test-appearance (:status result))]
     {:fx/type :v-box :style-class ["workspace-panel"] :spacing 10
      :children
-     [{:fx/type :h-box :spacing 12 :v-box/vgrow :always
-       :children [(namespace-list "test-namespaces" "Test namespaces" namespaces ns-sym
-                                  (:test-namespace actions) false state tree)
-                  (with-test-status (selection-list "test-definitions" "Tests" :tests definitions selected
-                                                    (comp str :name) (:test-definition actions) false)
-                    #(tests/case-status state ns-sym (symbol %)))]}
-      {:fx/type :h-box :spacing 8
-       :children [(button "Run suite" #((:run-tests actions) nil nil) running? {:icon :tests :primary? (not running?)})
-                  (button "Run namespace" #((:run-tests actions) ns-sym nil) (or running? (nil? ns-sym)))
-                  (button "Run test" #((:run-tests actions) ns-sym test-sym) (or running? (nil? selected)))
-                  (button "Stop tests" (:cancel-tests actions) (not running?))
-                  (button "Open test source" #((:open-test actions) selected)
-                          (or (nil? selected) (:busy? state) (:dirty? state)))]}
-      (status-label "test-summary" (tests/result-label result) tone icon)
-      {:fx/type fx/ext-on-instance-lifecycle
-       :on-created follow-transcript!
-       :desc {:fx/type :text-area :id "test-details" :editable false :wrap-text true :pref-row-count 6
-              :text (str/join "\n" (:output result))}}]}))
+     [{:fx/type :split-pane :orientation :vertical :divider-positions [0.38] :v-box/vgrow :always
+       :items
+       [{:fx/type :h-box :spacing 12 :min-height 90
+         :children [(namespace-list "test-namespaces" "Test namespaces" namespaces ns-sym
+                                    (:test-namespace actions) false state tree)
+                    (with-test-status (selection-list "test-definitions" "Tests" :tests definitions selected
+                                                      (comp str :name) (:test-definition actions) false)
+                      #(tests/case-status state ns-sym (symbol %)))]}
+        {:fx/type :v-box :spacing 8 :min-height 100
+         :children
+         [{:fx/type :h-box :spacing 8
+           :children [(button "Run suite" #((:run-tests actions) nil nil) running? {:icon :tests :primary? (not running?)})
+                      (button "Run namespace" #((:run-tests actions) ns-sym nil) (or running? (nil? ns-sym)))
+                      (button "Run test" #((:run-tests actions) ns-sym test-sym) (or running? (nil? selected)))
+                      (button "Stop tests" (:cancel-tests actions) (not running?))
+                      (button "Open test source" #((:open-test actions) selected)
+                              (or (nil? selected) (:busy? state) (:dirty? state)))]}
+          (status-label "test-summary" (tests/result-label result) tone icon)
+          {:fx/type code-editor/lifecycle :id "test-details" :log? true :v-box/vgrow :always
+           :text (str/join "\n" (map :text lines))
+           :error-rows (into #{} (keep-indexed #(when (:error? %2) %1)) lines)}]}]}]}))
 
 (defn- order-entries [state]
   (when-let [system (:system state)]
@@ -438,6 +442,7 @@
 (defn- view [state actions]
   (let [{:keys [definition draft dirty? system busy?]} state
         requires? (= :requires (:category state))
+        failure (when-not requires? (tests/source-failure state definition))
         test-tree (tests/targets state)
         tests-open? (get-in state [:tests-view :open?])
         defs (filterv #(str/includes? (str/lower-case (str (:name %)))
@@ -520,16 +525,25 @@
                               (order-panel state actions)
                               {:fx/type :v-box :spacing 6 :style-class ["workspace-panel" "editor-panel"]
                                :children
-                               (cond-> [(assoc (heading (cond requires? (str "Requires · " (:namespace state))
-                                                              definition (str (:namespace definition) "/" (:name definition))
-                                                              :else "Select a definition") :file) :wrap-text true)
-                                        {:fx/type code-editor/lifecycle :v-box/vgrow :always
+                               (cond-> [(cond-> (assoc (heading (cond requires? (str "Requires · " (:namespace state))
+                                                                      definition (str (:namespace definition) "/" (:name definition))
+                                                                      :else "Select a definition")
+                                                                (if failure :error :file))
+                                                       :wrap-text true)
+                                          failure (update :style-class conj "test-failure-heading" "tone-error"))]
+                                 failure
+                                 (conj (status-label "test-failure"
+                                                     (str (:heading failure) " · " (:description failure))
+                                                     :error nil))
+                                 true
+                                 (conj {:fx/type code-editor/lifecycle :v-box/vgrow :always
                                          :text (if requires? (session/requires-text state) (or draft ""))
                                          :document-key (if requires? [system :requires (:namespace state)] [system (:id definition)])
+                                         :error-rows (when-let [row (:row failure)] #{row})
                                          :saved-text (:source definition)
                                          :editable (and (not busy?) (boolean (:writable? definition)))
                                          :on-text-changed (:edit actions)
-                                         :on-context-menu-requested (when-not busy? (symbol-menu/on-editor definition (:lookup-symbol actions)))}]
+                                         :on-context-menu-requested (when-not busy? (symbol-menu/on-editor definition (:lookup-symbol actions)))})
                                  (or requires? definition)
                                  (conj (if requires?
                                          (status-label "editor-access" "Read only" nil :lock)
