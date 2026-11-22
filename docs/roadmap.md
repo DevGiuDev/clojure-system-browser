@@ -1,5 +1,15 @@
 # Roadmap
 
+## Test Runner alias convention — 2026-11-22
+
+Projects that split their Clojure CLI test configuration across `:test`
+(extra paths, dependencies and JVM options) and `:runner` (the runner
+main-opts) are detected when `:runner` launches Kaocha, Cognitect or
+Lazytest, and the child process composes every test alias so the classpath
+keeps the `:test` configuration. **Run namespace** and **Run test** use the
+runner's native selectors; a `test` task in `bb.edn` stays suite-only. See
+[ADR 023](decisions/023-runner-alias-convention.md).
+
 ## Comment blocks and contextual evaluation — 2026-11-22
 
 Top-level `(comment …)` forms of a namespace are discovered as read-only

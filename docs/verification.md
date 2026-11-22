@@ -8,12 +8,42 @@ were executed from prepared verifications.
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
 | Core, including test path and Java VM discovery | 60 | 477 | No failures or errors; JDK 27 |
-| Desktop with headless JavaFX controls | 21 | 220 | No failures or errors; JDK 27 |
+| Desktop with headless JavaFX controls | 21 | 221 | No failures or errors; JDK 27 |
 | TUI with virtual terminal | 23 | 281 | No failures or errors; JDK 27 |
-| nREPL and test process integration | 12 | 108 | No failures or errors; JDK 27 |
-| Suite total | **116** | **1086** | No failures or errors |
+| nREPL and test process integration | 14 | 125 | No failures or errors; JDK 27 |
+| Suite total | **118** | **1104** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | Not re-run here (pexpect/pyte unavailable); last recorded 40-check run predates this change |
 | clj-kondo | — | — | 0 errors, 0 warnings |
+
+## Test Runner alias convention (ADR 023) — 2026-11-22
+
+Executed on Linux with JDK 27 via `JAVA_CMD`, all four suites with zero
+failures and errors: core `clojure -Srepro -M:test` (60 tests / 477
+assertions), `clojure -Srepro -M:live-test` (14 / 125),
+`clojure -Srepro -M:desktop:desktop-test` (21 / 221) and
+`clojure -Srepro -M:tui:tui-test` (23 / 281); `clj-kondo` with 0 errors and
+0 warnings.
+
+The change was driven from a report against real projects with the
+`:test` + `:runner` convention (Rephrase with Lazytest, logging4j2 with
+Cognitect). Before editing, the bug was reproduced from a project nREPL:
+`csb.test-command/detect` returned `{:driver :bb}` for that layout, which is
+suite-only and produces the reported "Unavailable" message. After the
+change, `detect` was checked against copies of the two real configurations
+(Lazytest and Cognitect runners, both with a `bb.edn` test task) and against
+an unrecognized `:runner` that keeps the `bb` fallback. The full
+`csb.tests/run!` flow was executed against a Lazytest layout project before
+the suite runs: suite, namespace and single test each returned `:passed`
+with the composed command `clojure -M:runner:test`. The default directory of
+`lazytest.main` without paths (`test`) was confirmed from the published
+2.1.0 artifact in the local cache.
+
+The new live tests cover the convention end to end with real processes
+(suite, namespace and test runs with their command labels) and, without
+processes, the detection descriptors for Lazytest and Cognitect, the
+composed alias arguments, the native `-n`/`-v` selectors and the negative
+cases. No production code outside the test-runner extension changed; no
+visual review was performed because the Tests view markup is untouched.
 
 ## Comment blocks and contextual evaluation (ADR 022) — 2026-11-22
 

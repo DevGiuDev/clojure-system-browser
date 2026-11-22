@@ -15,25 +15,48 @@
       (#{"-i" "--init" "-e" "--eval" "--report"} flag) (recur (+ index 2) remaining)
       (and value (#{"-m" "--main"} flag)) {:module value :args-index (+ index 2)})))
 
+(def ^:private modules
+  {"kaocha.runner" :kaocha "cognitect.test-runner" :cognitect "lazytest.main" :lazytest})
+
+(def ^:private exec-fns
+  '{cognitect.test-runner.api/test :cognitect})
+
 (defn detect [^Path root indexed?]
   (let [deps (config/read-config root "deps.edn")
         aliases (:aliases deps)
         test-aliases (config/test-aliases deps)
-        configured (some (fn [id]
-                          (let [alias (get aliases id)
+        with-aliases (fn [id] (vec (distinct (into [id] test-aliases))))
+        descriptor (fn [id]
+                     (let [alias (get aliases id)
+                           opts (:main-opts alias)
+                           exec (exec-symbol alias)]
+                       (cond
+                         (and (sequential? opts) (seq opts) (every? string? opts))
+                         {:driver :main :main (vec opts) :aliases (with-aliases id)
+                          :runner (modules (:module (main-entry opts)))}
+                         exec
+                         {:driver :exec :exec exec :aliases (with-aliases id)
+                          :runner (exec-fns exec)})))
+        configured (some descriptor test-aliases)
+        ;; Projects in the :test + :runner convention keep the test paths and
+        ;; dependencies in :test and the runner main-opts in :runner. Only a
+        ;; :runner that launches a recognized test runner becomes the command;
+        ;; unrelated :runner aliases keep the bb, Leiningen or default fallback.
+        runner-descriptor (let [alias (get aliases :runner)
                                 opts (:main-opts alias)
                                 exec (exec-symbol alias)]
                             (cond
                               (and (sequential? opts) (seq opts) (every? string? opts))
-                              {:driver :main :main (vec opts) :aliases [id]
-                               :runner ({"kaocha.runner" :kaocha "cognitect.test-runner" :cognitect
-                                         "lazytest.main" :lazytest} (:module (main-entry opts)))}
+                              (when-let [kind (modules (:module (main-entry opts)))]
+                                {:driver :main :main (vec opts)
+                                 :aliases (with-aliases :runner) :runner kind})
                               exec
-                              {:driver :exec :exec exec :aliases [id]
-                               :runner ({'cognitect.test-runner.api/test :cognitect} exec)})))
-                        test-aliases)]
+                              (when-let [kind (exec-fns exec)]
+                                {:driver :exec :exec exec
+                                 :aliases (with-aliases :runner) :runner kind})))]
     (cond
       configured configured
+      runner-descriptor runner-descriptor
       (contains? (:tasks (config/read-config root "bb.edn")) 'test) {:driver :bb}
       (config/file? root "project.clj") {:driver :lein}
       (and indexed? (config/file? root "deps.edn"))

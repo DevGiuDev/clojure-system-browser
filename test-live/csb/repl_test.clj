@@ -7,6 +7,7 @@
             [csb.service :as service]
             [csb.session :as session]
             [csb.tests :as tests]
+            [csb.test-command :as command]
             [nrepl.misc :as misc]
             [nrepl.server :as server]
             [nrepl.transport :as wire])
@@ -321,6 +322,104 @@
           (is (nil? (:line failure)))))
       (finally
         (doseq [file (reverse (file-seq root))] (io/delete-file file true))))))
+
+(deftest runner-alias-convention-runs-suite-namespace-and-test
+  (let [root (.toFile (Files/createTempDirectory "csb-runner-" (make-array FileAttribute 0)))
+        state (session/create)]
+    (try
+      ;; The :test + :runner convention keeps the paths and dependency in :test
+      ;; and the runner main-opts in :runner, with a bb task alongside.
+      (spit (io/file root "deps.edn")
+            (pr-str '{:paths ["src"]
+                      :aliases
+                      {:test {:extra-paths ["test"]
+                              :extra-deps {io.github.noahtheduke/lazytest {:mvn/version "2.1.0"}}}
+                       :runner {:main-opts ["-m" "lazytest.main"]}}}))
+      (spit (io/file root "bb.edn")
+            (pr-str '{:tasks {test {:doc "Run the test suite." :exec-fn build/run-tests}}}))
+      (let [orders (io/file root "src/demo/orders.clj")
+            suite (io/file root "test/demo/orders_test.clj")]
+        (io/make-parents orders)
+        (spit orders "(ns demo.orders)\n(defn total [items] (reduce + 0 (map :price items)))")
+        (io/make-parents suite)
+        (spit suite (str "(ns demo.orders-test (:require [lazytest.core :refer [defdescribe it]]\n"
+                         "                             [demo.orders :refer [total]]))\n"
+                         "(defdescribe total-suite\n"
+                         "  (it \"adds item prices\" (= 30 (total [{:price 10} {:price 20}])))\n"
+                         "  (it \"is zero for no items\" (= 0 (total []))))")))
+      (session/open! state root {})
+      (let [snapshot (run-project-tests! state nil nil)
+            run (tests/result snapshot)]
+        (is (= :passed (:status run)) (pr-str run))
+        (is (= "clojure -M:runner:test" (:command run))))
+      (let [snapshot (run-project-tests! state 'demo.orders-test nil)
+            run (tests/result snapshot)]
+        (is (= :passed (:status run)) (pr-str run))
+        (is (= "clojure -M:runner:test · demo.orders-test" (:command run)))
+        (is (= :passed (tests/case-status snapshot 'demo.orders-test 'total-suite))))
+      (let [snapshot (run-project-tests! state 'demo.orders-test 'total-suite)
+            run (tests/result snapshot)]
+        (is (= :passed (:status run)) (pr-str run))
+        (is (= "clojure -M:runner:test · demo.orders-test/total-suite" (:command run))))
+      (finally
+        (doseq [file (reverse (file-seq root))] (io/delete-file file true))))))
+
+(defn- write-detect-project! ^java.nio.file.Path [deps]
+  (let [root (Files/createTempDirectory "csb-detect-" (make-array FileAttribute 0))]
+    (spit (.toFile (.resolve root "deps.edn")) deps)
+    root))
+
+(deftest runner-alias-detection-composes-test-aliases-and-scopes-natively
+  (let [temp (.toFile (Files/createTempDirectory "csb-detect-cmd-" (make-array FileAttribute 0)))
+        cleanup! (fn [^java.nio.file.Path root]
+                   (doseq [file (reverse (file-seq (.toFile root)))] (io/delete-file file true)))]
+    (try
+      ;; The convention composes every test alias, so the child classpath keeps
+      ;; the paths and dependencies declared in :test.
+      (let [root (write-detect-project! (pr-str '{:aliases
+                                                  {:test {:extra-paths ["test"]
+                                                          :extra-deps {io.github.noahtheduke/lazytest {:mvn/version "2.1.0"}}}
+                                                   :runner {:main-opts ["-m" "lazytest.main"]}}}))
+            descriptor (command/detect root false)]
+        (is (= {:driver :main :main ["-m" "lazytest.main"] :aliases [:runner :test] :runner :lazytest}
+               descriptor))
+        (is (command/supports-scope? descriptor 'demo.orders-test))
+        (let [{:keys [argv label]}
+              (command/invocation descriptor root (.toPath temp) 'demo.orders-test nil [])]
+          (is (= "-M:runner:test:csb-test-process" (nth argv 4)))
+          (is (= "clojure -M:runner:test · demo.orders-test" label))
+          (is (str/includes? (nth argv 3) "--namespace")))
+        (cleanup! root))
+      ;; A cognitect runner through :runner keeps its native namespace and var
+      ;; selectors for scoped runs.
+      (let [root (write-detect-project! (pr-str '{:aliases
+                                                  {:test {:extra-paths ["test"]}
+                                                   :runner {:main-opts ["-m" "cognitect.test-runner"]}}}))
+            descriptor (command/detect root false)]
+        (is (= {:driver :main :main ["-m" "cognitect.test-runner"] :aliases [:runner :test] :runner :cognitect}
+               descriptor))
+        (let [argv (:argv (command/invocation descriptor root (.toPath temp)
+                                              'demo.orders-test 'demo.orders-test/total-suite []))]
+          (is (str/includes? (nth argv 3) "\"-n\" \"demo.orders-test\""))
+          (is (str/includes? (nth argv 3) "\"-v\" \"demo.orders-test/total-suite\"")))
+        (cleanup! root))
+      ;; An unrelated :runner main is not taken as a test command and falls
+      ;; back to the bb task, and a single combined alias keeps its shape.
+      (let [root (write-detect-project! (pr-str '{:aliases
+                                                  {:test {:extra-paths ["test"]}
+                                                   :runner {:main-opts ["-m" "my.app.main"]}}}))
+            bb (io/file (.toFile root) "bb.edn")]
+        (spit bb (pr-str '{:tasks {test {:doc "Run the test suite." :exec-fn build/run-tests}}}))
+        (is (= {:driver :bb} (command/detect root false)))
+        (cleanup! root))
+      (let [root (write-detect-project! (pr-str '{:aliases
+                                                  {:lazytest {:extra-paths ["spec"]
+                                                              :extra-deps {io.github.noahtheduke/lazytest {:mvn/version "2.1.0"}}
+                                                              :main-opts ["-m" "lazytest.main" "--dir" "spec"]}}}))]
+        (is (= {:driver :main :main ["-m" "lazytest.main" "--dir" "spec"] :aliases [:lazytest] :runner :lazytest}
+               (command/detect root false)))
+        (cleanup! root))
+      (finally (doseq [file (reverse (file-seq temp))] (io/delete-file file true))))))
 
 (defn- lein-executable? []
   (when-let [process (try (.start (ProcessBuilder. ^java.util.List ["lein" "version"]))

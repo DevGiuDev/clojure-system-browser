@@ -396,13 +396,18 @@ PgUp/PgDn to scroll in the TUI or **Stop tests** (F7) to stop the process.
 In Desktop, drag the divider to resize the log.
 
 - For Clojure CLI, CSB uses the first configured `:main-opts` or `:exec-fn`
-  among `:test`, `:tests`, `:kaocha` and `:lazytest`. Kaocha, Cognitect and Lazytest
-  runs use their native selectors. For other aliases, scoped runs use
-  `clojure.test` with the same test classpath. A Clojure CLI project with only
-  test paths can run its indexed `clojure.test` tests.
+  among `:test`, `:tests`, `:kaocha` and `:lazytest`. When those aliases only
+  carry paths and dependencies, CSB recognizes the `:runner` convention —
+  the runner alias that launches Kaocha, Cognitect or Lazytest — and composes
+  every test alias in the child command, keeping the paths, dependencies and
+  JVM options declared in `:test`. Kaocha, Cognitect and Lazytest runs use
+  their native selectors. For other aliases, scoped runs use `clojure.test`
+  with the same test classpath. A Clojure CLI project with only test paths
+  can run its indexed `clojure.test` tests.
 - Leiningen projects use `lein test` with their normal test profiles and
   selectors. A `test` task in `bb.edn` can run as `bb test` and displays
-  output and exit status.
+  output and exit status; a bb task cannot express namespace or var filters,
+  so **Run namespace** and **Run test** stay unavailable for it.
 
 Dots are orange while a test is running or queued, green when it passes,
 red when it fails and gray when the runner supplies no conclusive result.

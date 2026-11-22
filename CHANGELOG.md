@@ -37,6 +37,15 @@ project is 0.x, minor bumps carry features and the MVP stays free to evolve.
   and results for each `defdescribe`. The
   [Lazytest sample project](examples/lazytest-sample-project/README.md) shows
   passing, failing and skipped suites.
+- Projects that split their Clojure CLI test configuration across `:test`
+  (extra paths, dependencies and JVM options) and `:runner` (the runner
+  `:main-opts`) are now detected and run: the Test Runner recognizes a
+  `:runner` alias when it launches Kaocha, Cognitect or Lazytest, composes
+  every test alias in the child command so the classpath keeps the `:test`
+  configuration, and **Run namespace** and **Run test** use the runner's
+  native selectors instead of reporting these commands unavailable. A `test`
+  task in `bb.edn` remains a suite-only command
+  ([ADR 023](docs/decisions/023-runner-alias-convention.md)).
 
 ### Changed
 
