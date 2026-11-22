@@ -76,6 +76,10 @@ from a checkout as described in [Requirements and versions](#requirements-and-ve
 - Desktop and TUI can connect to an existing nREPL, evaluate expressions and
   definitions separately from Save, and browse loaded namespaces, vars and metadata.
   The Combined view compares names in the runtime and the project's source index.
+  Top-level `(comment …)` forms of the current namespace appear under a counted
+  **(comment)** category: the whole block is shown read-only, and evaluating it
+  sends its body forms one by one, stopping at the first error. Selected code
+  in the editor can be evaluated as typed from the Desktop context menus.
   See [REPL walkthrough](#repl-walkthrough) and [verification](docs/verification.md).
 - The SUnit-inspired **Tests** view runs the project's test command in a
   background process. Both clients stream output and show the result beside
@@ -325,10 +329,18 @@ the bundled examples, run the corresponding command from that project's root.
 |---|---|
 | `examples/sample-project` | `clojure -Srepro -M:repl` |
 | `examples/poly-sample-project` | `clojure -Srepro -M:dev:test:repl` |
+| `examples/lazytest-sample-project` | `clojure -Srepro -M:repl` |
 
-The launcher loads the example tests and starts nREPL on a free loopback port.
-It writes the port to `.nrepl-port`. Keep it running while using CSB and stop
-it with Ctrl+C.
+The launcher loads the example namespaces and tests and starts nREPL on a
+free loopback port. It writes the port to `.nrepl-port`. Keep it running
+while using CSB and stop it with Ctrl+C.
+
+Each example ships `(comment …)` blocks with ready-made expressions for its
+API. Open the example in CSB, connect the panel, select the **(comment)**
+category and choose **Evaluate block** (or F6 in the TUI) to run the whole
+block against that live runtime, or evaluate a single selection from the
+editor menu in Desktop. The Poly example's development scratch block shows
+one form introducing an alias and the next one using it.
 
 1. Open the same project in CSB. Select **REPL** in Desktop or press `p` in
    the TUI. The panel fills the port from `.nrepl-port` in the root of the
@@ -343,6 +355,14 @@ it with Ctrl+C.
    Choose **Evaluate definition** or press F6 in the TUI. This sends the visible
    definition, including any draft, in its already loaded namespace.
    **Save** is the separate disk operation.
+   Top-level `(comment …)` blocks of the namespace are listed under the
+   **(comment)** category, read-only with the REPL disconnected. Selecting
+   **Evaluate block** there (or F6 in the TUI) sends the block's body forms
+   one by one, stopping at the first error: earlier forms keep their effects
+   and the rest stay unexecuted. Evaluating never writes sources or drafts.
+   In Desktop, **Eval in REPL** in the editor context menu sends the selected
+   text exactly as selected — a selection wrapped in `(comment …)` evaluates
+   to nil and runs nothing.
 4. Choose **Inspect runtime** or press F4 to open **Live**, then select a
    namespace or var and choose **Open** or press Enter. The inspector shows
    public and private vars and their available metadata. **Combined** (Tab in

@@ -5,3 +5,7 @@
 
 (defn delivery-fee [subtotal]
   (if (>= subtotal 50) 0 5))
+
+(comment
+  (subtotal [10 15 20])
+  (delivery-fee (subtotal [10 15 20])))

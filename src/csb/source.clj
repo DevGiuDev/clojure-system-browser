@@ -20,6 +20,7 @@
 (def ^:private ignored-dirs #{".git" ".cache" ".cpcache" ".clj-kondo" ".lsp"
                              "target" "node_modules" ".idea"})
 (def ^:private writable-heads #{'defn 'defn- 'clojure.core/defn 'clojure.core/defn-})
+(def ^:private comment-heads #{'comment 'clojure.core/comment})
 (def ^:private known-heads
   {'defn :function 'defn- :function 'defmacro :macro 'def :value
    'defonce :value 'defprotocol :protocol 'defrecord :type 'deftype :type
@@ -289,6 +290,30 @@
      :discarded? (= :uneval (n/tag node))
      :preview (preview-line body start)}))
 
+(defn- block-entry
+  "Read-only comment block: one top-level `(comment …)` form with its verbatim
+   text and the direct body forms a whole-block evaluation would run, in order.
+   Discarded forms and the wrapper itself never run. Never evaluates anything."
+  [text body bom? file ns-sym rev ordinal node]
+  (let [parts (list-parts node)
+        head (some-> parts first leaf-symbol)]
+    (when (contains? comment-heads head)
+      (let [{:keys [row] :as r} (node-range body node)
+            offset #(if bom? (inc %) %)
+            body-forms (into []
+                             (for [form (remove #(= :uneval (n/tag %)) (next parts))
+                                   :let [fr (node-range body form)]]
+                               {:source (subs text (offset (:start fr)) (offset (:end fr)))
+                                :location (select-keys fr [:row :col :end-row :end-col])}))]
+        {:id [(str file) ordinal] :file (str file) :namespace ns-sym :ordinal ordinal
+         :name (str "(comment) · " (last (str/split (str file) #"[\\/]")) ":" row)
+         :kind :comment :category :comment :block? true
+         :location (select-keys r [:row :col :end-row :end-col])
+         :range {:start (offset (:start r)) :end (offset (:end r))}
+         :source (subs text (offset (:start r)) (offset (:end r)))
+         :body-forms body-forms :form-count (count body-forms) :revision rev
+         :writable? false :read-only-reason "Comment blocks are read-only"}))))
+
 (defn document
   "Index supported top-level constructs. Nested and discarded forms are never writable.
 
@@ -344,7 +369,11 @@
                (fn [ordinal node]
                  (form-entry body bindings ordinal node
                              (when (contains? def-ordinals ordinal) [(str file) ordinal])))
-               nodes)]
+               nodes)
+        blocks (keep-indexed
+                (fn [ordinal node]
+                  (block-entry text body bom? file ns-sym rev ordinal node))
+                nodes)]
     {:file (str file) :namespace ns-sym :aliases (:reader-aliases bindings)
      :symbol-context symbol-context
      :symbol-usages (when (and index-usages? ns-sym)
@@ -361,7 +390,8 @@
      (mapv #(if (> (get counts [(:namespace %) (:name %)]) 1)
               (assoc % :writable? false :read-only-reason "Duplicate definition name in file") %)
            definitions)
-     :forms (vec forms)}))
+     :forms (vec forms)
+     :blocks (vec blocks)}))
 
 (defn- check-file! [^Path file]
   (when-not (Files/isRegularFile file no-links)
@@ -482,12 +512,13 @@
                               (if (= :ok (:status result)) (:value result)
                                   {:file (str file) :error (:error result)}))) files)
             defs (vec (mapcat :definitions results))
+            blocks (vec (mapcat :blocks results))
             duplicates (frequencies (map (juxt :namespace :name) defs))
             defs (mapv #(if (> (get duplicates [(:namespace %) (:name %)]) 1)
                           (assoc % :writable? false :read-only-reason "Ambiguous definition across source roots") %) defs)
-            definitions-by-id (into {} (map (juxt :id identity) defs))
+            definitions-by-id (into {} (map (juxt :id identity) (concat defs blocks)))
             snapshot
-            {:root (str root) :roots (mapv str roots) :definitions defs
+            {:root (str root) :roots (mapv str roots) :definitions defs :blocks blocks
              :index-version (random-uuid)
              :definitions-by-id definitions-by-id
              :definitions-by-name (group-by (juxt :namespace (comp name :name)) defs)

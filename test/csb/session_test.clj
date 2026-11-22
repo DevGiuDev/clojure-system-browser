@@ -147,6 +147,58 @@
         (session/select-category! state :requires)
         (is (= "No requires declared." (session/requires-text @state)))))))
 
+(deftest comment-category-lists-blocks-and-keeps-them-read-only
+  (with-project {"src/a.clj" (str "(ns a)\n"
+                                  "(defn f [] 1)\n"
+                                  "(comment\n"
+                                  "  (f)\n"
+                                  "  (prn :side))\n"
+                                  "(comment)")}
+    (fn [root]
+      (let [state (session/create)]
+        (session/open! state root {})
+        (let [{:keys [entries]} (session/categories @state)]
+          (is (= [{:category :comment :count 2}
+                  {:category :functions :count 1}
+                  {:category nil :count 1}
+                  {:category :requires}]
+                 entries))
+          (is (= "(comment) · 2" (session/category-label (first entries))))
+          (is (= "functions · 1" (session/category-label (second entries)))))
+        ;; Selecting the facet lists the blocks and shows the whole block
+        ;; ready-only, without any draft.
+        (session/select-category! state :comment)
+        (is (= :comment (:category @state)))
+        (is (= 2 (count (session/definitions @state))))
+        (is (true? (get-in @state [:definition :block?])))
+        (is (= "(comment\n  (f)\n  (prn :side))" (:draft @state)))
+        (is (false? (:dirty? @state)))
+        (is (false? (get-in @state [:definition :writable?])))
+        ;; Blocks reject editing and saving without losing the view.
+        (session/edit! state "(tampered)")
+        (is (= "(comment\n  (f)\n  (prn :side))" (:draft @state)))
+        (session/save! state)
+        (is (= "unsupported: Comment blocks are read-only" (:status @state)))
+        (is (= "(comment\n  (f)\n  (prn :side))" (:draft @state)))
+        ;; The (all) sentinel keeps listing only the habitual definitions.
+        (session/select-category! state nil)
+        (is (= #{'f} (set (map :name (session/definitions @state)))))
+        ;; A pending draft blocks navigation towards the blocks and survives it.
+        (session/edit! state "(defn f [] 9)")
+        (session/select-category! state :comment)
+        (is (nil? (:category @state)))
+        (is (:dirty? @state))
+        (is (= "(defn f [] 9)" (:draft @state)))
+        (session/discard! state)
+        (session/select-category! state :comment)
+        (is (true? (get-in @state [:definition :block?])))
+        ;; Selecting the empty block by id keeps it intact and read-only.
+        (let [empty (second (session/definitions @state))]
+          (session/select-definition! state (:id empty))
+          (is (= "(comment)" (:draft @state)))
+          (is (false? (:dirty? @state)))
+          (is (true? (get-in @state [:definition :block?]))))))))
+
 (deftest editor-commits-via-the-service
   (with-project {"src/a.clj" "(ns a) (defn f [] 1)"}
     (fn [root]

@@ -747,6 +747,69 @@
         (press! ui KeyType/ArrowUp)
         (is (str/includes? (frame ui) "(deftest total-test")))))))
 
+(defn- fresh-frame [{:keys [^TerminalScreen screen state last-frame] :as ui}]
+  ;; Background REPL updates do not drive the terminal loop; render the
+  ;; current state the way the next key press would before reading the frame.
+  (#'tui/render-if-changed! screen @state last-frame)
+  (frame ui))
+
+(deftest comment-blocks-show-and-evaluate-from-the-repl-panel
+  (with-open [running (server/start-server :bind "127.0.0.1" :port 0)]
+    (fixture/with-example
+     (fn [root]
+       (fixture/write!
+        (.resolve root "src/shop/orders.clj")
+        (str (slurp (.toFile (.resolve root "src/shop/orders.clj")))
+             "\r\n(comment\r\n  (println \"block output\")\r\n  (total [{:amount 2}]))\r\n"))
+       (fixture/write! (.resolve root ".nrepl-port") (str (:port running)))
+       (with-terminal root
+         (fn [{:keys [state] :as ui}]
+           (try
+             (total! ui)
+             (session/edit! state fixture/total-draft)
+             ;; F6 on a definition still evaluates the visible draft.
+           (press! ui \p)
+           (press! ui KeyType/Enter)
+           (fixture/await-state! state #(= :connected (get-in % [:repl :phase])))
+           (doseq [key "(do (clojure.core/create-ns 'shop.orders) (binding [*ns* (the-ns 'shop.orders)] (clojure.core/refer-clojure)) (clojure.core/intern 'shop.orders 'total (fn [lines] (reduce + 0 (map :amount lines)))))"]
+             (press! ui key))
+           (press! ui KeyType/F5)
+           (fixture/await-state! state #(and (nil? (get-in % [:repl :active]))
+                                             (str/includes? (or (get-in % [:repl :status]) "") "finished")))
+             (press! ui KeyType/F6)
+             (fixture/await-state! state #(and (nil? (get-in % [:repl :active]))
+                                               (str/includes? (or (get-in % [:repl :status]) "") "finished")))
+             (is (str/includes? (frame ui) "#'shop.orders/total"))
+             ;; Returning to the source keeps the draft.
+             (press! ui KeyType/Escape)
+             (is (= fixture/total-draft (:draft @state)))
+             (is (:dirty? @state))
+             (press! ui \d)
+             (is (false? (:dirty? @state)))
+             ;; Navigate to the (comment) category and select the appended
+             ;; block by its body; the example ships its own block first.
+             (navigate! ui KeyType/Tab #(= 1 (:focus @state)))
+             (navigate! ui KeyType/ArrowUp #(= :comment (:category @state)))
+             (navigate! ui KeyType/Tab #(= 2 (:focus @state)))
+             (navigate! ui KeyType/ArrowDown
+                        #(and (true? (get-in @state [:definition :block?]))
+                              (str/includes? (str (get-in @state [:definition :source])) "block output")))
+             (is (true? (get-in @state [:definition :block?])))
+             (is (str/includes? (frame ui) "(comment"))
+             ;; F6 in the panel evaluates the whole block.
+             (press! ui \p)
+             (press! ui KeyType/F6)
+             (fixture/await-state! state #(and (nil? (get-in % [:repl :active]))
+                                               (str/includes? (or (get-in % [:repl :status]) "") "finished")))
+             (is (str/includes? (fresh-frame ui) "out: block output"))
+             ;; The block sees the redefinition the draft evaluation made above.
+             (is (str/includes? (fresh-frame ui) "=> 12"))
+             ;; Returning to the source keeps the block selection.
+             (press! ui KeyType/Escape)
+             (is (true? (get-in @state [:definition :block?])))
+             (is (str/includes? (frame ui) "(comment"))
+             (finally (repl/disconnect! state)))))))))
+
 (defn -main [& _]
   (let [r (test/run-tests 'csb.tui-smoke)]
     (shutdown-agents)

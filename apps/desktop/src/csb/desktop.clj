@@ -175,8 +175,12 @@
 (def ^:private definition-icons
   {:function :function :macro :macro :value :value :test :tests})
 
-(defn- definition-item [{:keys [id name writable? kind location]}]
-  {:id id :text (str name (when-not writable? " [read only]") " · " (:row location))
+(defn- definition-item [{:keys [id name writable? kind location block?]}]
+  {:id id
+   ;; Blocks already identify file and line in their label.
+   :text (if block?
+           name
+           (str name (when-not writable? " [read only]") " · " (:row location)))
    :kind kind :read-only? (not writable?)})
 
 (defn- definition-cell [{:keys [text kind read-only?]}]
@@ -485,8 +489,10 @@
           :text (or input "") :on-text-changed (:repl-input actions) :style-class ["text-area" "monospace"]}
          {:fx/type :h-box :spacing 8
           :children [(button "Evaluate" (:repl-evaluate actions) (or pending? (str/blank? input)))
-                     (button "Evaluate definition" (:repl-definition actions)
-                             (or pending? (:busy? state) (not (repl/jvm-definition? state))))
+                     (button (if (get-in state [:definition :block?])
+                               "Evaluate block" "Evaluate definition")
+                             (:repl-definition actions)
+                             (or pending? (:busy? state) (not (repl/evaluable? state))))
                      (button "Interrupt" (:repl-interrupt actions)
                              (or (not interrupt?) (nil? active) (:stop active)))]}]))}))
 
@@ -628,7 +634,8 @@
                                                     (get state :filter "") (:filter actions))
                                         (dissoc (definition-list defs (some #(when (= (:id %) (:id definition)) %) defs)
                                                                   #((:definition actions) (:id %)) (or busy? dirty?)
-                                                                  (symbol-menu/on-definitions defs (:lookup-symbol actions)))
+                                                                  (symbol-menu/on-definitions defs (:lookup-symbol actions)
+                                                                                              (:repl-row actions) repl/row-evaluable?))
                                                 :h-box/hgrow)]}]}
                           (cond->
                            {:fx/type :border-pane
@@ -655,7 +662,9 @@
                                          :saved-text (:source definition)
                                          :editable (and (not busy?) (boolean (:writable? definition)))
                                          :on-text-changed (:edit actions)
-                                         :on-context-menu-requested (when-not busy? (symbol-menu/on-editor definition (:lookup-symbol actions)))})
+                                         :on-context-menu-requested (when-not busy?
+                                                                       (symbol-menu/on-editor definition (:lookup-symbol actions)
+                                                                                              (:repl-selection actions) repl/selection-evaluable?))})
                                  (or requires? definition)
                                  (conj (if requires?
                                          (status-label "editor-access" "Read only" nil :lock)
@@ -802,6 +811,14 @@
       :repl-disconnect #(repl/disconnect! state)
       :repl-evaluate #(repl/evaluate-input! state)
       :repl-definition #(repl/evaluate-definition! state)
+      :repl-row (fn [entry]
+                  (repl/evaluate-row! state entry)
+                  (repl/hide-inspection! state)
+                  (repl/show-panel! state))
+      :repl-selection (fn [definition text]
+                        (repl/evaluate-selection! state definition text)
+                        (repl/hide-inspection! state)
+                        (repl/show-panel! state))
       :repl-interrupt #(repl/interrupt! state)
       :show-inspection #(repl/show-inspection! state)
       :hide-inspection #(repl/hide-inspection! state)

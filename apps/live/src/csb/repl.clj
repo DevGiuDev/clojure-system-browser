@@ -61,6 +61,43 @@
             (recur data))
           (model/fail! :timeout "nREPL handshake timed out" {}))))))
 
+(defn- submit
+  ([panel code ns] (submit panel code ns nil))
+  ([panel code ns queue]
+   (cond
+     (not= :connected (:phase panel)) (assoc panel :status "Connect to nREPL first")
+     (:active panel) panel
+     (str/blank? code) (assoc panel :status "Enter an expression")
+     (> (count code) max-code) (assoc panel :status "Input exceeds 16384 characters")
+     :else
+     (-> panel
+         (append :input (str (when ns (str "[" ns "] ")) code))
+         (assoc :active {:id (identifier) :code code :ns ns :due (deadline (:eval-timeout-ms panel))
+                         :block-queue queue}
+                :status "Evaluating…")))))
+
+(defn evaluate-input! [state]
+  (swap! state update :repl (fn [panel]
+                              (let [next (submit panel (:input panel) nil)]
+                                (if (and (nil? (:active panel)) (:active next))
+                                  (assoc next :input "")
+                                  next)))))
+
+(defn- block-advance
+  "Done branch of a whole-block evaluation: advance to the next body form
+   after a complete response without error; an error, interrupt or timeout
+   drops the remaining forms. Threaded by cond->, so `panel` comes first."
+  [panel active failure status]
+  (if (and (seq (:block-queue active)) (not failure) (not (:failed? active))
+           (nil? (:stop active)) (not (contains? status "interrupted")))
+    (let [queue (:block-queue active)]
+      (submit (assoc panel :active nil) (first queue) (:ns active) (next queue)))
+    (assoc panel :active nil :status (cond
+                                       (= :timeout (:stop active)) "Evaluation timed out"
+                                       (contains? status "interrupted") "Evaluation interrupted"
+                                       (or failure (:failed? active)) "Evaluation failed"
+                                       :else "Evaluation finished"))))
+
 (defn- evaluation-response [panel response]
   (let [active (:active panel)
         current? (= (:id response) (:id active))
@@ -81,11 +118,7 @@
         (contains? status "need-input")
         (assoc :status "Program is waiting for stdin. Interrupt to return to the REPL.")
         (contains? status "done")
-        (assoc :active nil :status (cond
-                                     (= :timeout (:stop active)) "Evaluation timed out"
-                                     (contains? status "interrupted") "Evaluation interrupted"
-                                     (or failure (:failed? active)) "Evaluation failed"
-                                     :else "Evaluation finished")))
+        (block-advance active failure status))
       panel)))
 
 (defn- inspection-ended [panel error observation]
@@ -309,35 +342,127 @@
     (swap! state update :repl
            #(if (:connection %) (assoc % :phase :disconnecting :status "Disconnecting…") %))))
 
-(defn- submit [panel code ns]
-  (cond
-    (not= :connected (:phase panel)) (assoc panel :status "Connect to nREPL first")
-    (:active panel) panel
-    (str/blank? code) (assoc panel :status "Enter an expression")
-    (> (count code) max-code) (assoc panel :status "Input exceeds 16384 characters")
-    :else
-    (-> panel
-        (append :input (str (when ns (str "[" ns "] ")) code))
-        (assoc :active {:id (identifier) :code code :ns ns :due (deadline (:eval-timeout-ms panel))}
-               :status "Evaluating…"))))
-
-(defn evaluate-input! [state]
-  (swap! state update :repl (fn [panel]
-                              (let [next (submit panel (:input panel) nil)]
-                                (if (and (nil? (:active panel)) (:active next))
-                                  (assoc next :input "")
-                                  next)))))
-
-(defn jvm-definition? [{:keys [definition]}]
-  (when-let [file (:file definition)]
+(defn- jvm-file? [entry]
+  (when-let [file (:file entry)]
     (or (str/ends-with? file ".clj") (str/ends-with? file ".cljc"))))
 
-(defn evaluate-definition! [state]
+(defn jvm-definition? [{:keys [definition]}]
+  (jvm-file? definition))
+
+(defn evaluable?
+  "Whether the panel button can evaluate the current entry: a Clojure JVM
+   definition, or a comment block with at least one body form."
+  [{:keys [definition]}]
+  (if (:block? definition)
+    (boolean (and (jvm-file? definition) (seq (:body-forms definition))))
+    (boolean (jvm-definition? {:definition definition}))))
+
+(defn row-evaluable?
+  "Whether a Definitions row offers Eval in REPL: blocks need a JVM file and
+   body forms, definitions a JVM file. Revisions are checked when running."
+  [entry]
+  (if (:block? entry)
+    (boolean (and (jvm-file? entry) (seq (:body-forms entry))))
+    (boolean (jvm-file? entry))))
+
+(defn selection-evaluable? [definition]
+  (boolean (jvm-file? definition)))
+
+(defn- block-tag [block]
+  (str (last (str/split (str (:file block)) #"[\\/]")) ":" (get-in block [:location :row])))
+
+(defn- indexed-entry [system entry]
+  (when system
+    (let [result (service/get-definition-source system (:id entry))]
+      (when (= :ok (:status result)) (:value result)))))
+
+(defn- busy-status [s]
+  (assoc-in s [:repl :status] "Wait for the current evaluation or interrupt it"))
+
+(defn- start-block! [state block]
   (swap! state
-         (fn [{:keys [definition draft] :as s}]
-           (if (jvm-definition? s)
-             (update s :repl submit draft (str (:namespace definition)))
-             (assoc-in s [:repl :status] "Select a Clojure JVM definition first")))))
+         (fn [{:keys [repl] :as s}]
+           (let [forms (mapv :source (:body-forms block))]
+             (cond
+               (not= :connected (:phase repl))
+               (assoc-in s [:repl :status] "Connect to nREPL first")
+               (:active repl)
+               (busy-status s)
+               (some #(> (count %) max-code) forms)
+               (assoc-in s [:repl :status] "A form of the block exceeds 16384 characters")
+               :else
+               (-> s
+                   (update :repl append :notice
+                           (str "Block " (block-tag block) " · " (count forms)
+                                (if (= 1 (count forms)) " form" " forms")))
+                   (update :repl submit (first forms) (str (:namespace block))
+                           (vec (next forms)))))))))
+
+(defn- evaluate-block! [state block]
+  (let [{:keys [system]} @state
+        current (indexed-entry system block)]
+    (cond
+      (nil? system)
+      (swap! state assoc-in [:repl :status] "Open a project before evaluating a block")
+      (or (nil? current) (not= (:revision current) (:revision block)))
+      (swap! state assoc-in [:repl :status]
+             "The block changed since it was listed; reload before evaluating")
+      (not (jvm-file? current))
+      (swap! state assoc-in [:repl :status]
+             "Only blocks in .clj or .cljc files can be evaluated")
+      (empty? (:body-forms current))
+      (swap! state assoc-in [:repl :status] "The block has no forms to evaluate")
+      :else (start-block! state current))))
+
+(defn evaluate-definition! [state]
+  (if (:block? (:definition @state))
+    (evaluate-block! state (:definition @state))
+    (swap! state
+           (fn [{:keys [definition draft] :as s}]
+             (if (jvm-definition? s)
+               (update s :repl submit draft (str (:namespace definition)))
+               (assoc-in s [:repl :status] "Select a Clojure JVM definition first"))))))
+
+(defn evaluate-row!
+  "Evaluate a Definitions row: the whole block for a comment block, otherwise
+   the visible draft when it still belongs to that row and revision, or the
+   indexed source of the row itself."
+  [state entry]
+  (if (:block? entry)
+    (evaluate-block! state entry)
+    (let [{:keys [definition system]} @state]
+      (if (and definition
+               (= (:id definition) (:id entry))
+               (= (:revision definition) (:revision entry)))
+        (evaluate-definition! state)
+        (let [current (indexed-entry system entry)]
+          (cond
+            (nil? system)
+            (swap! state assoc-in [:repl :status] "Open a project before evaluating")
+            (or (nil? current) (not= (:revision current) (:revision entry)))
+            (swap! state assoc-in [:repl :status]
+                   "The row changed since it was listed; reload before evaluating")
+            (not (jvm-file? current))
+            (swap! state assoc-in [:repl :status]
+                   "Only definitions in .clj or .cljc files can be evaluated")
+            :else
+            (swap! state (fn [{:keys [repl] :as s}]
+                           (if (:active repl)
+                             (busy-status s)
+                             (update s :repl submit (:source current)
+                                     (str (:namespace current))))))))))))
+
+(defn evaluate-selection!
+  "Send the selected text exactly as captured, in the namespace of the shown
+   definition. A selection including the outer `(comment …)` form is evaluated
+   literally by the runtime: it returns nil and runs no body form."
+  [state definition text]
+  (swap! state
+         (fn [s]
+           (if (selection-evaluable? definition)
+             (update s :repl submit text (str (:namespace definition)))
+             (assoc-in s [:repl :status]
+                       "Only selections in .clj or .cljc files can be evaluated")))))
 
 (defn interrupt! [state]
   (swap! state update :repl

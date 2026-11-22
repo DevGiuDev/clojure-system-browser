@@ -8,7 +8,10 @@
   :test {:extra-paths ["components/shop/test" "components/warehouse/test"
                        "development/test"]}
   :repl {:extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}}
-         :main-opts ["-e" "(require 'poly.sample.shop.components.invoice-test)"
+         :main-opts ["-e" "(require 'poly.sample.shop.components.invoice)"
+                     "-e" "(require 'poly.sample.warehouse.components.orders)"
+                     "-e" "(require 'poly.sample.dev.scratch)"
+                     "-e" "(require 'poly.sample.shop.components.invoice-test)"
                      "-e" "(require 'poly.sample.warehouse.components.orders-test)"
                      "-e" "(require 'poly.sample.dev.scratch-test)"
                      "-m" "nrepl.cmdline" "--bind" "127.0.0.1" "--port" "0"]}}}

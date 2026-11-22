@@ -481,16 +481,25 @@
     (fn [root]
       (with-window
         (fn [{:keys [state] :as ui}]
-          (let [items (fn []
-                        (let [stage (sync! ui)]
-                          (fx! #(when-let [^ListView results (node stage "#definition-usage-results")]
-                                  (vec (.getItems results))))))]
-            (is (nil? (items)))
-            (open! ui root)
-            (is (= ["shop.orders/receipt"] (mapv :text (items))))
-            (total! ui)
-            (when (is (= ["shop.orders/receipt" "shop.orders-test/total-test"] (mapv :text (items))))
-              (is (= ["src/shop/orders.clj:16" "test/shop/orders_test.clj:6"] (mapv :detail (items))))
+            ;; Reads that expect content retry briefly: the panel derives from
+            ;; render-time state and the forced render can lag one frame
+            ;; behind the selection under suite load.
+            (let [items (fn []
+                          (let [stage (sync! ui)]
+                            (fx! #(when-let [^ListView results (node stage "#definition-usage-results")]
+                                    (vec (.getItems results))))))
+                  items-with-retry! (fn []
+                                      (let [deadline (+ (System/nanoTime) (long 2e9))]
+                                        (loop [v (items)]
+                                          (if (or (and (vector? v) (seq v)) (>= (System/nanoTime) deadline))
+                                            v
+                                            (do (Thread/sleep 50) (recur (items)))))))]
+              (is (nil? (items)))
+              (open! ui root)
+              (is (= ["shop.orders/receipt"] (mapv :text (items-with-retry!))))
+              (total! ui)
+              (when (is (= ["shop.orders/receipt" "shop.orders-test/total-test"] (mapv :text (items-with-retry!))))
+              (is (= ["src/shop/orders.clj:16" "test/shop/orders_test.clj:6"] (mapv :detail (items-with-retry!))))
               (select! ui "#definition-usage-results" "shop.orders-test/total-test")
               (edit! ui fixture/total-draft)
               (press-key! ui "#definition-usage-results" KeyCode/ENTER)
@@ -504,11 +513,11 @@
               (press-shortcut! ui KeyCode/F "f")
               (type-search! ui "shop.orders/total")
               (press-key! ui "#search-query" KeyCode/ENTER)
-              (is (= ["shop.orders/receipt" "shop.orders-test/total-test"] (mapv :text (items))))
+              (is (= ["shop.orders/receipt" "shop.orders-test/total-test"] (mapv :text (items-with-retry!))))
               (is (context-action! ui "#definitions" "Find related tests"))
               (is (nil? (items)))
               (press-key! ui "#symbol-results" KeyCode/ESCAPE)
-              (is (= 2 (count (items))))
+              (is (= 2 (count (items-with-retry!))))
 
               (select! ui "#definitions" "receipt ·")
               (let [stage (sync! ui)]
@@ -516,7 +525,7 @@
                        (fx! #(.getText ^Label (node stage "#definition-uses-status"))))))
               (select! ui "#definitions" "discount ·")
               (select! ui "#definitions" "total ·")
-              (is (= 2 (count (items))))
+              (is (= 2 (count (items-with-retry!))))
               (fixture/with-example
                 (fn [other]
                   (fixture/write! (.resolve other "src/shop/orders.clj") "(ns shop.orders)\n(defn total [] 1)")
@@ -847,6 +856,107 @@
            (is (false? (fx! #(.isEditable ^CodeArea (node stage "#definition-source")))))
            (select! ui "#categories" "(all)")
            (is (str/includes? (source ui) "(deftest total-test"))))))))
+
+(defn- menu-disabled? [ui selector title]
+  (let [stage (sync! ui)]
+    (fx! (fn []
+           (Event/fireEvent (node stage selector)
+                            (ContextMenuEvent. ContextMenuEvent/CONTEXT_MENU_REQUESTED
+                                               10 10 120 120 true nil))
+           (when-let [^ContextMenu menu (some #(when (instance? ContextMenu %) %) (Window/getWindows))]
+             (let [item (some #(when (= title (.getText ^MenuItem %)) %) (.getItems menu))]
+               (.hide menu)
+               (boolean (and item (.isDisable item)))))))))
+
+(defn- repl-output [ui]
+  (let [stage (sync! ui)]
+    (fx! #(.getText ^TextArea (node stage "#repl-output")))))
+
+(deftest comment-blocks-and-eval-actions-reach-the-repl-console
+  (with-open [running (server/start-server :bind "127.0.0.1" :port 0)]
+    (fixture/with-example
+     (fn [root]
+       (with-window
+        (fn [{:keys [state] :as ui}]
+          (fixture/write!
+           (.resolve root "src/shop/orders.clj")
+           (str (slurp (.toFile (.resolve root "src/shop/orders.clj")))
+                "\r\n(comment\r\n  (println \"block output\")\r\n  (total [{:amount 2}]))\r\n"))
+          (let [original (slurp (.toFile (.resolve root "src/shop/orders.clj")))]
+            (fixture/write! (.resolve root ".nrepl-port") (str (:port running)))
+            (open! ui root)
+            ;; The (comment) facet lists the blocks and the viewer shows the
+            ;; whole block read-only, even with the REPL disconnected. The
+            ;; example now ships its own block, so the test finds its own by
+            ;; its body.
+            (select! ui "#categories" "(comment)")
+            (is (pos? (count (session/definitions @state))))
+            (is (true? (get-in @state [:definition :block?])))
+            (is (str/includes? (source ui) "(comment"))
+            (let [stage (sync! ui)]
+              (is (false? (fx! #(.isEditable ^CodeArea (node stage "#definition-source"))))))
+            ;; Load the namespace in the runtime, then evaluate the block:
+            ;; the console shows the execution, its output and its value.
+            (fire! ui "REPL")
+            (fire! ui "Connect")
+            (fixture/await-state! state #(= :connected (get-in % [:repl :phase])))
+            (let [stage (sync! ui)]
+              (fx! #(.setText ^TextArea (node stage "#repl-input")
+                              "(do (clojure.core/create-ns 'shop.orders) (binding [*ns* (the-ns 'shop.orders)] (clojure.core/refer-clojure)) (clojure.core/intern 'shop.orders 'total (fn [lines] (reduce + 0 (map :amount lines)))))")))
+            (fire! ui "Evaluate")
+            (fixture/await-state! state #(and (nil? (get-in % [:repl :active]))
+                                              (str/includes? (or (get-in % [:repl :status]) "") "finished")))
+            (let [block (some #(when (some (fn [f] (str/includes? (str (:source f)) "block output"))
+                                           (:body-forms %)) %)
+                              (session/definitions @state))]
+              (is (some? block))
+              (session/select-definition! state (:id block)))
+            (fire! ui "Evaluate block")
+            (fixture/await-state! state #(and (nil? (get-in % [:repl :active]))
+                                              (str/includes? (or (get-in % [:repl :status]) "") "finished")))
+            (is (str/includes? (repl-output ui) "out: block output"))
+            (is (str/includes? (repl-output ui) "=> 2"))
+            ;; Evaluating leaves the file untouched.
+            (is (fixture/bytes= original (.resolve root "src/shop/orders.clj")))
+            ;; Eval in REPL on the drafted row evaluates the visible draft
+            ;; and keeps the draft intact.
+            (select! ui "#categories" "functions")
+            (select! ui "#definitions" "total ·")
+            (edit! ui fixture/total-draft)
+            (is (context-action! ui "#definitions" "Eval in REPL"))
+            (fixture/await-state! state #(str/includes? (or (get-in % [:repl :status]) "") "finished"))
+            (is (str/includes? (repl-output ui) "#'shop.orders/total"))
+            (is (= fixture/total-draft (source ui)))
+            (is (:dirty? @state))
+            (fire! ui "Discard")
+            ;; A selection in the code panel is sent exactly as selected.
+            (select! ui "#definitions" "total ·")
+            (let [stage (sync! ui)]
+              (fx! (fn []
+                     (let [^CodeArea area (node stage "#definition-source")
+                           selection "\"Calculate the total of a collection of order lines.\""
+                           start (str/index-of (.getText area) selection)]
+                       (.selectRange area (int start) (int (+ start (count selection))))))))
+            (is (context-action! ui "#definition-source" "Eval in REPL"))
+            (fixture/await-state! state #(str/includes? (or (get-in % [:repl :status]) "") "finished"))
+            (is (str/includes? (repl-output ui) "=> \"Calculate the total"))
+            ;; A blank selection disables the editor action.
+            (let [stage (sync! ui)]
+              (fx! #(.moveTo ^CodeArea (node stage "#definition-source") (int 0))))
+            (is (menu-disabled? ui "#definition-source" "Eval in REPL")))))))))
+
+(deftest eval-actions-stay-inactive-in-the-initial-view
+  (with-window
+   (fn [ui]
+     ;; No editor menu and no Definitions menu without a definition.
+     (is (nil? (context-action! ui "#definition-source" "Eval in REPL")))
+     (is (nil? (context-action! ui "#definitions" "Eval in REPL")))
+     ;; The Evaluate definition button exists but stays disabled.
+     (fire! ui "REPL")
+     (let [stage (sync! ui)]
+       (is (fx! #(let [^Button button (some (fn [^Button x] (when (= "Evaluate definition" (.getText x)) x))
+                                            (.lookupAll (.getRoot (.getScene stage)) ".button"))]
+                   (and button (.isDisable button)))))))))
 
 (defn -main [& _]
   (try

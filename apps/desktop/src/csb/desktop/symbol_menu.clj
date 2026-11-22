@@ -1,5 +1,6 @@
 (ns csb.desktop.symbol-menu
-  (:require [csb.syntax :as syntax])
+  (:require [clojure.string :as str]
+            [csb.syntax :as syntax])
   (:import [javafx.event EventHandler]
            [javafx.scene Node]
            [javafx.scene.control ContextMenu ListCell ListView MenuItem SeparatorMenuItem]
@@ -36,14 +37,18 @@
       (instance? ListView node) nil
       (instance? Node node) (recur (.getParent ^Node node)))))
 
-(defn on-definitions [definitions lookup]
+(defn on-definitions [definitions lookup eval-row evaluable?]
   (fn [^ContextMenuEvent event]
     (let [^ListView view (.getSource event)
           index (if (.isKeyboardTrigger event)
                   (.getSelectedIndex (.getSelectionModel view))
                   (row-index event))]
       (when-let [definition (when index (get definitions index))]
-        (show! view event (lookup-items lookup definition nil))))))
+        (show! view event (into (lookup-items lookup definition nil)
+                                (when eval-row
+                                  [nil
+                                   ["Eval in REPL"
+                                    (when (evaluable? definition) #(eval-row definition))]])))))))
 
 (defn- editor-symbol [^CodeArea area ^ContextMenuEvent event]
   (let [keyboard? (.isKeyboardTrigger event)
@@ -53,15 +58,23 @@
                    (.orElse (.getCharacterIndex (.hit area (.getX point) (.getY point))) -1)))]
     (syntax/symbol-at (.getText area) offset keyboard?)))
 
-(defn on-editor [definition lookup]
+(defn on-editor [definition lookup eval-selection evaluable?]
   (when definition
     (fn [^CodeArea area ^ContextMenuEvent event]
-      (let [selected? (not (.isEmpty (.getSelectedText area)))
+      ;; The selection is captured when the menu opens and sent exactly as it
+      ;; was selected, even if the definition changed in between.
+      (let [selected-text (str (.getSelectedText area))
+            selected? (not (.isEmpty (.getSelectedText area)))
             editable? (.isEditable area)
             sym (editor-symbol area event)]
         (show! area event
                (into (lookup-items lookup definition sym)
                      [nil
+                      ["Eval in REPL"
+                       (when (and eval-selection
+                                  (evaluable? definition)
+                                  (not (str/blank? selected-text)))
+                         #(eval-selection definition selected-text))]
                       ["Cut" (when (and editable? selected?) #(.cut area))]
                       ["Copy" (when selected? #(.copy area))]
                       ["Paste" (when editable? #(.paste area))]

@@ -10,6 +10,18 @@ project is 0.x, minor bumps carry features and the MVP stays free to evolve.
 
 ### Added
 
+- Top-level `(comment …)` forms appear under a counted **(comment)** category
+  in Desktop and the TUI. The category lists the blocks by file and line and
+  the code panel shows the whole block read-only, with or without a REPL
+  connected. Evaluating a block (Desktop **Evaluate block** or TUI F6 in the
+  nREPL panel) sends its body forms one by one in the source namespace,
+  stopping at the first error; Desktop's **Eval in REPL** menu actions
+  evaluate a captured Definitions row or the exact editor selection
+  ([ADR 022](docs/decisions/022-comment-blocks-evaluation.md)).
+- The example projects ship `(comment …)` blocks with expressions for their
+  APIs, and all three can start a live nREPL (`:repl` alias, new in the
+  Lazytest example) to test the browser's evaluation flow against a real
+  runtime.
 - Modal project search for namespaces and definitions in the TUI. Press `f`
   to open it.
 - The **Tree** checkbox next to **Namespaces** in Desktop switches between

@@ -24,15 +24,17 @@
   (case category
     :requires "(requires)"
     nil "(all)"
+    :comment (str "(comment) · " count)
     (str (name category) " · " count)))
 
 (defn definitions [state]
   (let [{:keys [system namespace category]} state]
     (when system
-      (if (= :requires category)
-        []
-        (->> (:value (service/list-definitions system namespace))
-             (filter #(or (nil? category) (= category (:category %)))) vec)))))
+      (cond
+        (= :requires category) []
+        (= :comment category) (:value (service/list-blocks system namespace))
+        :else (->> (:value (service/list-definitions system namespace))
+                   (filter #(or (nil? category) (= category (:category %)))) vec)))))
 
 (defn requires-text [{:keys [system namespace]}]
   (let [entries (:value (service/list-requires system namespace))]

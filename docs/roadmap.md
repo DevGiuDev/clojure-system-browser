@@ -1,5 +1,21 @@
 # Roadmap
 
+## Comment blocks and contextual evaluation — 2026-11-22
+
+Top-level `(comment …)` forms of a namespace are discovered as read-only
+locator entries ([ADR 022](decisions/022-comment-blocks-evaluation.md)): a
+counted `(comment)` category lists them by file and line, the code panel
+shows the whole block verbatim without a REPL connected, and editing and
+saving are refused. The nREPL panel evaluates a whole block by sending its
+body forms sequentially in the source namespace, stopping at the first
+error, and Desktop evaluates captured rows and editor selections
+(literally, even when they include the `(comment …)` wrapper). Evaluation
+never writes sources or drafts. Blocks stay out of definitions, search, the
+uses index and symbol lookup. The example projects ship `(comment …)` blocks
+and can all start a live nREPL to test the flow; see
+[ADR 022](decisions/022-comment-blocks-evaluation.md) and the README REPL
+walkthrough.
+
 ## Navigation and search — 2026-11-22
 
 Desktop has substring filters in the Namespaces and Definitions columns.

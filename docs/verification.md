@@ -7,14 +7,69 @@ were executed from prepared verifications.
 
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
-| Core, including test path and Java VM discovery | 58 | 430 | No failures or errors; JDK 27 |
-| Desktop with headless JavaFX controls | 19 | 203 | No failures or errors; JDK 27 |
-| TUI with virtual terminal | 22 | 271 | No failures or errors; JDK 27 |
-| nREPL and test process integration | 10 | 76 | No failures or errors; JDK 27 |
-| Suite total | **109** | **980** | No failures or errors |
-| Production TUI with PTY/Vim | — | — | **40 checks**, no failures |
-| Production TUI search with PTY | — | — | Shortcut, navigation, scrolling and resize passed |
+| Core, including test path and Java VM discovery | 60 | 477 | No failures or errors; JDK 27 |
+| Desktop with headless JavaFX controls | 21 | 220 | No failures or errors; JDK 27 |
+| TUI with virtual terminal | 23 | 281 | No failures or errors; JDK 27 |
+| nREPL and test process integration | 12 | 108 | No failures or errors; JDK 27 |
+| Suite total | **116** | **1086** | No failures or errors |
+| Production TUI with PTY/Vim | — | — | Not re-run here (pexpect/pyte unavailable); last recorded 40-check run predates this change |
 | clj-kondo | — | — | 0 errors, 0 warnings |
+
+## Comment blocks and contextual evaluation (ADR 022) — 2026-11-22
+
+Executed on Linux with JDK 27 via `JAVA_CMD`, all four suites with zero
+failures and errors: core `clojure -Srepro -M:test` (60 tests / 477
+assertions), `clojure -Srepro -M:live-test` (12 / 108),
+`clojure -Srepro -M:desktop:desktop-test` (21 / 220) and
+`clojure -Srepro -M:tui:tui-test` (23 / 281); `clj-kondo` with 0 errors and
+0 warnings. The behaviour tests were written first and confirmed failing
+before the implementation.
+
+Covered by automation: block discovery with verbatim sources, discarded
+forms, `clojure.core/comment`, Unicode, CRLF and the `(comment)` facet; the
+facet listing blocks read-only through the shared navigation guards; block
+evaluation against a real nREPL with sequential forms, stop on the first
+error, retained effects, alias use across forms, history order, untouched
+file and draft; interruption and disconnection mid-block; stale rows,
+`.cljd` blocks, blank selections, selections evaluated literally including a
+whole `(comment …)` wrapper, unloaded namespaces and busy sessions; the
+Desktop menus (keyboard trigger, drafted row, captured selection, disabled
+states, opening the console and the initial view without a project); the TUI
+navigation to `(comment)`, F6 dispatch for definitions and blocks, and the
+transcript visibility after the run.
+
+The changed namespaces were additionally verified interactively in a
+project nREPL (`-M:desktop:nrepl`) before the final suite runs: compiling
+each edited namespace with `:reload`, listing blocks from a temporary
+project, and running a block end to end against an in-process nREPL server.
+
+The example projects were verified the same way after adding their
+`(comment …)` blocks: the service discovers them (one block in
+`sample-project`, three namespaces in `poly-sample-project`, one in the
+Lazytest example), and each example's `:repl` alias started a live nREPL
+whose namespaces are loaded — the browser evaluated the whole block of every
+example against that runtime, including the Poly development scratch block
+whose second form uses the alias introduced by its first. The
+`desktop_smoke` and `tui_smoke` suites that append their own block to a
+disposable copy of `sample-project` select it by body content because the
+example now ships its own blocks. With the example blocks in place, the
+`uses-follow-the-visible-definition` Desktop test exposed a pre-existing
+harness race: a diagnostic run showed the session state and the uses service
+correct (`:ready` with both matches) while the rendered panel had not drawn
+the list yet, and a read at that moment reported empty results. The test now
+retries content-expected reads for up to two seconds — the same pattern the
+list-selection helper already uses — and the full Desktop suite ran green
+six consecutive times afterwards, including concurrent runs. No product
+change was involved: the panel derives from render-time state and the
+service always returned the correct matches.
+
+Not executed: manual interaction with a real Desktop window and a real
+terminal (menus with the mouse, the production window flow); and the
+production TUI PTY check (`scripts/check-terminal.py`), which needs
+pexpect and pyte and was not re-run in this environment — its last recorded
+run predates this change. The automated Desktop suite runs headless JavaFX
+controls and the TUI suite a virtual terminal; per
+[acceptance](acceptance.md), that manual pass remains pending.
 
 The [Desktop namespace tree](decisions/020-desktop-namespace-tree.md) was
 verified on Linux with JDK 27. The headless test covers the flat default,

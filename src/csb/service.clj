@@ -44,6 +44,16 @@
                        (filter (fn [d] (= ns-sym (:namespace d))))
                        (sort-by (juxt (comp str :name) :file (comp :row :location))) vec)))))
 
+(defn list-blocks
+  "Top-level `(comment …)` blocks of a namespace's files, in file and source
+   order. Read-only locator entries; listing never evaluates project code."
+  ([system ns-sym] (list-blocks system ns-sym {}))
+  ([system ns-sym options]
+   (m/attempt #(do (source-world! options)
+                  (->> (:blocks @(:snapshot system))
+                       (filter (fn [b] (= ns-sym (:namespace b))))
+                       (sort-by (juxt :file :ordinal)) vec)))))
+
 (defn list-tests [system]
   (m/attempt
    #(->> (:definitions @(:snapshot system))
@@ -56,15 +66,20 @@
 (defn list-categories
   "Counted category facets plus a namespace summary: {:total :files :facets}.
    Facets appear only for kinds with at least one definition of the namespace,
-   sorted by name; files counts the distinct definition files."
+   sorted by name; files counts the distinct definition files. The `(comment)`
+   facet appears only when the namespace has top-level comment blocks; the
+   totals keep counting definitions only."
   ([system ns-sym] (list-categories system ns-sym {}))
   ([system ns-sym options]
    (m/attempt #(do (source-world! options)
                   (let [defs (->> (:definitions @(:snapshot system))
-                                  (filter (fn [d] (= ns-sym (:namespace d)))))]
+                                  (filter (fn [d] (= ns-sym (:namespace d)))))
+                        blocks (->> (:blocks @(:snapshot system))
+                                    (filter (fn [b] (= ns-sym (:namespace b)))))]
                     {:total (count defs)
                      :files (count (distinct (map :file defs)))
-                     :facets (->> (frequencies (map :category defs))
+                     :facets (->> (merge-with + (frequencies (map :category defs))
+                                              (when (seq blocks) {:comment (count blocks)}))
                                   (map (fn [[category count]] {:category category :count count}))
                                   (sort-by (comp str :category)) vec)})))))
 
@@ -161,6 +176,8 @@
    (fn []
      (let [{:keys [symbol-contexts symbol-usages usage-index-stale?] :as snapshot} @(:snapshot system)
            context (indexed-definition snapshot context-id)]
+       (when (:block? context)
+         (m/fail! :unsupported "Comment blocks have no symbol lookups" {:id context-id}))
        (when-not (and (contains? #{:definition :usages :tests} action) (or (nil? sym) (symbol? sym)))
          (m/fail! :unsupported "Expected a symbol and a source lookup action" {:action action}))
        (when (and usage-index-stale? (#{:usages :tests} action))

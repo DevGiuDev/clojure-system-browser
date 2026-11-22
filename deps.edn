@@ -4,6 +4,7 @@
  :aliases
  {:test {:extra-paths ["test"] :main-opts ["-m" "csb.test-runner"]}
   :cli {:main-opts ["-m" "csb.cli"]}
+  :nrepl {:main-opts ["-m" "nrepl.cmdline" "--bind" "127.0.0.1" "--port" "7888"]}
   :live-test {:extra-paths ["apps/live/src" "extensions/test-runner/src" "test-live"]
               :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}}
               :main-opts ["-m" "csb.repl-test"]}

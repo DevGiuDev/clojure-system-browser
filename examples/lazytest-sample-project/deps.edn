@@ -3,4 +3,10 @@
  {:lazytest {:extra-paths ["spec"]
              :extra-deps {io.github.noahtheduke/lazytest {:mvn/version "2.1.0"}}
              :main-opts ["--report" "stderr" "-m" "lazytest.main"
-                         "--dir" "spec" "--exclude" "setup-error"]}}}
+                         "--dir" "spec" "--exclude" "setup-error"]}
+  :repl {:extra-paths ["spec"]
+         :extra-deps {io.github.noahtheduke/lazytest {:mvn/version "2.1.0"}
+                      nrepl/nrepl {:mvn/version "1.7.0"}}
+         :main-opts ["-e" "(require 'demo.orders)"
+                     "-e" "(require 'demo.orders-test)"
+                     "-m" "nrepl.cmdline" "--bind" "127.0.0.1" "--port" "0"]}}}

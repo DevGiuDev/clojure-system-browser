@@ -4,6 +4,7 @@
             [clojure.string :as str]
             [clojure.test :as test :refer [deftest is testing]]
             [csb.repl :as repl]
+            [csb.service :as service]
             [csb.session :as session]
             [csb.tests :as tests]
             [nrepl.misc :as misc]
@@ -371,6 +372,156 @@
           (is (some #(str/includes? % "Ran 1 tests") (:output run))))
         (finally
           (doseq [file (reverse (file-seq root))] (io/delete-file file true)))))))
+
+(deftest comment-blocks-evaluate-sequentially-and-stop-on-the-first-error
+  (let [root (.toFile (Files/createTempDirectory "csb-blocks-" (make-array FileAttribute 0)))
+        file (doto (io/file root "src/demo/blocks.clj") io/make-parents)]
+    (spit file (str "(ns demo.blocks)\n"
+                    "(defn total [] 1)\n"
+                    "(comment\n"
+                    "  (Thread/sleep 30000)\n"
+                    "  (def interrupted-effect :ran))\n"
+                    "(comment\n"
+                    "  (require '[clojure.string :as renamed-str])\n"
+                    "  (println \"block output\")\n"
+                    "  (renamed-str/upper-case \"abc\")\n"
+                    "  (defn total [] 42)\n"
+                    "  (throw (ex-info \"block failure\" {}))\n"
+                    "  (def effect :ran))\n"
+                    "(comment)\n"))
+    (let [bytes-before (Files/readAllBytes (.toPath file))
+          state (session/create)]
+      (try
+        (session/open! state root {})
+        (try
+          (with-open [running (server/start-server :bind "127.0.0.1" :port 0)]
+            (connect! state (:port running) {})
+            (evaluate! state "(do (clojure.core/create-ns 'demo.blocks) (binding [*ns* (the-ns 'demo.blocks)] (refer-clojure)) (intern 'demo.blocks 'total 1))")
+            (finished! state)
+            (session/select-category! state :comment)
+            (is (true? (get-in @state [:definition :block?])))
+            (let [main (second (session/definitions @state))]
+              (session/select-definition! state (:id main))
+              ;; The whole block runs form by form, in order, until the first error.
+              (repl/evaluate-definition! state)
+              (is (= "Evaluation failed" (:status (finished! state))))
+              (let [text (transcript state)
+                    at #(str/index-of text %)]
+                (is (str/includes? text "Block blocks.clj:6 · 6 forms"))
+                (is (every? some? [(at "[demo.blocks] (require '[clojure.string")
+                                   (at "out: block output")
+                                   (at "=> \"ABC\"")
+                                   (at "[demo.blocks] (defn total [] 42)")
+                                   (at "block failure")]))
+                (is (< (at "[demo.blocks] (require '[clojure.string")
+                       (at "out: block output")
+                       (at "=> \"ABC\"")
+                       (at "block failure")))
+                ;; The form after the error never ran.
+                (is (nil? (at "[demo.blocks] (def effect)"))))
+              ;; Earlier forms keep their effects in the runtime, including the
+              ;; redefinition of a var; the later form left nothing behind.
+              (evaluate! state "(demo.blocks/total)")
+              (finished! state)
+              (is (= [:value "42"] (last (:entries (:repl @state)))))
+              (evaluate! state "(resolve 'demo.blocks/effect)")
+              (finished! state)
+              (is (= [:value "nil"] (last (:entries (:repl @state)))))
+              ;; Evaluating leaves the file, the draft and the console untouched.
+              (is (java.util.Arrays/equals bytes-before (Files/readAllBytes (.toPath file))))
+              (is (false? (:dirty? @state)))
+              ;; An empty block stays unexecuted.
+              (let [entries (count (:entries (:repl @state)))
+                    empty (nth (session/definitions @state) 2)]
+                (session/select-definition! state (:id empty))
+                (repl/evaluate-definition! state)
+                (is (str/includes? (get-in @state [:repl :status]) "no forms"))
+                (is (= entries (count (:entries (:repl @state))))))))
+          (finally (repl/disconnect! state)))
+        (is (= "Disconnected" (:status (await! state #(= :disconnected (:phase %))))))
+        (finally
+          (doseq [f (reverse (file-seq root))] (io/delete-file f true)))))))
+
+(deftest block-and-selection-evaluation-validate-connection-and-revision
+  (let [root (.toFile (Files/createTempDirectory "csb-blocks-" (make-array FileAttribute 0)))
+        state (session/create)
+        blocks-file (doto (io/file root "src/demo/blocks.clj") io/make-parents)
+        never-file (doto (io/file root "src/demo/never.clj") io/make-parents)
+        dart-file (doto (io/file root "src/demo/dart.cljd") io/make-parents)]
+    (spit blocks-file (str "(ns demo.blocks)\n"
+                           "(defn total [] 1)\n"
+                           "(comment (Thread/sleep 30000) (def interrupted-effect :ran))\n"
+                           "(comment (def dart-shared :ok))\n"))
+    (spit never-file "(ns demo.never)\n(comment (def never-effect :ran) (def never-second :ran))\n")
+    (spit dart-file "(ns demo.blocks)\n(comment (def dart-effect :ran))\n")
+    (try
+      (session/open! state root {})
+      (try
+        (with-open [running (server/start-server :bind "127.0.0.1" :port 0)]
+          (connect! state (:port running) {})
+          (evaluate! state "(do (clojure.core/create-ns 'demo.blocks) (binding [*ns* (the-ns 'demo.blocks)] (refer-clojure)) (intern 'demo.blocks 'total 1))")
+          (finished! state)
+          (session/select-category! state :comment)
+          ;; A busy session refuses the block without enqueueing it.
+          (evaluate! state "(Thread/sleep 30000)")
+          (is (:active (:repl @state)))
+          (let [entries (count (:entries (:repl @state)))]
+            (repl/evaluate-definition! state)
+            (is (str/includes? (get-in @state [:repl :status]) "interrupt"))
+            (is (= entries (count (:entries (:repl @state))))))
+          (repl/interrupt! state)
+          (finished! state)
+          ;; A selection evaluates literally, in the namespace of the shown code.
+          (repl/evaluate-selection! state {:namespace 'clojure.string :file "src/x.clj"}
+                                    "(str (ns-name *ns*) \" sel\")")
+          (finished! state)
+          (is (str/includes? (transcript state) "[clojure.string] (str"))
+          (is (str/includes? (transcript state) "=> \"clojure.string sel\""))
+          ;; A selection including the outer (comment …) form runs nothing.
+          (repl/evaluate-selection! state {:namespace 'user :file "src/x.clj"}
+                                    "(comment (def wrapper-effect :ran))")
+          (finished! state)
+          (is (= [:value "nil"] (last (:entries (:repl @state)))))
+          (evaluate! state "(resolve 'wrapper-effect)")
+          (finished! state)
+          (is (= [:value "nil"] (last (:entries (:repl @state)))))
+          (let [sleepy (first (session/definitions @state))]
+            ;; A stale row refuses to evaluate instead of running old text.
+            (repl/evaluate-row! state (assoc sleepy :revision "sha256:stale"))
+            (is (str/includes? (get-in @state [:repl :status]) "reload"))
+            ;; Interrupting a block mid-way skips the remaining forms.
+            (repl/evaluate-row! state sleepy)
+            (is (:active (:repl @state)))
+            (repl/interrupt! state)
+            (is (= "Evaluation interrupted" (:status (finished! state))))
+            (evaluate! state "(resolve 'demo.blocks/interrupted-effect)")
+            (finished! state)
+            (is (= [:value "nil"] (last (:entries (:repl @state)))))
+            ;; ClojureDart blocks are listed but never evaluated.
+            (let [dart (some #(when (str/ends-with? (str (:file %)) ".cljd") %)
+                             (session/definitions @state))]
+              (is (some? dart))
+              (repl/evaluate-row! state dart)
+              (is (str/includes? (get-in @state [:repl :status]) ".clj or .cljc")))
+            ;; An unloaded source namespace surfaces the runtime error and runs
+            ;; nothing; the browser never requires it automatically.
+            (let [never-block (->> (service/list-blocks (:system @state) 'demo.never)
+                                   :value first)]
+              (repl/evaluate-row! state never-block)
+              (is (= "Evaluation failed" (:status (finished! state))))
+              (is (str/includes? (transcript state) "namespace-not-found"))
+              (evaluate! state "(resolve 'demo.never/never-effect)")
+              (finished! state)
+              (is (= [:value "nil"] (last (:entries (:repl @state))))))
+            ;; Losing the connection mid-block drops the pending forms.
+            (repl/evaluate-row! state sleepy)
+            (is (:active (:repl @state)))
+            (.close ^Closeable running)
+            (is (str/includes? (:status (await! state #(= :disconnected (:phase %)))) "Connection lost"))
+            (is (nil? (get-in @state [:repl :active])))))
+        (finally (repl/disconnect! state)))
+      (finally
+        (doseq [f (reverse (file-seq root))] (io/delete-file f true))))))
 
 (defn -main [& _]
   (let [r (test/run-tests 'csb.repl-test)]

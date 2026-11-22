@@ -579,3 +579,69 @@
           ;; A parse error keeps the file out of the view without hiding others.
           (is (= 1 (count (service/diagnostics system))))
           (is (= :parse (get-in (first (service/diagnostics system)) [:error :type]))))))))
+
+(deftest comment-blocks-are-discovered-as-read-only-blocks
+  (with-project
+    {"src/shop/orders.clj" (str "(ns shop.orders)\n"
+                                "(defn total [xs] (count xs))\n"
+                                "#_(comment (discarded-top))\n"
+                                "(comment\n"
+                                "  (total [1 2]) ; check\n"
+                                "  #_ (skipped)\n"
+                                "  (str \"✓ñ\" (name :ok)))\n"
+                                "(comment)\n"
+                                "(defn hidden [] (comment (inner)))")
+     "src/shop/extra.clj" (str "(ns shop.orders)\r\n"
+                               "(comment\r\n"
+                               "  (extra-run :crlf))\r\n")}
+    (fn [root]
+      (let [system (opened root)
+            blocks (:value (service/list-blocks system 'shop.orders))
+            [extra big empty] blocks]
+        ;; Two files of the same namespace contribute their top-level blocks,
+        ;; sorted by file and source order; top-level discards stay out.
+        (is (= 3 (count blocks)))
+        (is (str/ends-with? (:file extra) "extra.clj"))
+        (is (= 1 (:ordinal extra)))
+        (is (= "(comment\r\n  (extra-run :crlf))" (:source extra)))
+        (is (= ["(extra-run :crlf)"] (mapv :source (:body-forms extra))))
+        ;; The block keeps the whole form verbatim, with its inner comments,
+        ;; spaces and discarded forms; only the direct body forms are listed.
+        (is (= "(comment\n  (total [1 2]) ; check\n  #_ (skipped)\n  (str \"✓ñ\" (name :ok)))"
+               (:source big)))
+        (is (= ["(total [1 2])" "(str \"✓ñ\" (name :ok))"] (mapv :source (:body-forms big))))
+        (is (= 2 (:form-count big)))
+        (is (= 4 (get-in big [:location :row])))
+        (is (= "(comment) · orders.clj:4" (:name big)))
+        (is (= 'shop.orders (:namespace big)))
+        (is (false? (:writable? big)))
+        (is (= "Comment blocks are read-only" (:read-only-reason big)))
+        (is (= 0 (:form-count empty)))
+        (is (= "(comment)" (:source empty)))
+        (is (every? true? (map :block? blocks)))
+        ;; The (comment) facet counts the blocks without touching the
+        ;; definition totals, the (all) list or the search index.
+        (is (= [[:comment 3] [:functions 2]]
+               (mapv (juxt :category :count)
+                     (:facets (:value (service/list-categories system 'shop.orders))))))
+        (is (= 2 (:total (:value (service/list-categories system 'shop.orders)))))
+        (is (= #{'total 'hidden} (set (map :name (:value (service/list-definitions system 'shop.orders))))))
+        (is (empty? (:definitions (:value (service/search system "comment")))))
+        ;; Source order keeps showing the comment forms as before.
+        (is (= ["comment" "comment" "comment"]
+               (->> (:value (service/list-source-forms system 'shop.orders))
+                    (mapcat :forms)
+                    (filter #(contains? #{'comment 'clojure.core/comment} (:head %)))
+                    (mapv :label))))
+        ;; A block id resolves through the same definition lookup and rejects
+        ;; writes and symbol lookups.
+        (let [current (:value (service/get-definition-source system (:id big)))]
+          (is (= :ok (:status (service/get-definition-source system (:id big)))))
+          (is (true? (:block? current)))
+          (is (= (:revision big) (:revision current)))
+          (is (= :unsupported
+                 (get-in (service/definition-usages system (:id big)) [:error :type])))
+          (is (= :unsupported
+                 (get-in (service/save-definition! system (:id big) "(comment)"
+                                                   {:expected-revision (:revision big)})
+                         [:error :type]))))))))
