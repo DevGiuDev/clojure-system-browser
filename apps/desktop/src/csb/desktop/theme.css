@@ -75,7 +75,7 @@
 .desktop .button:disabled { -fx-opacity: 0.68; }
 .desktop .toolbar .button { -fx-padding: 5px 6px; }
 
-.desktop .text-field, .desktop .combo-box-base, .desktop .text-area, .desktop .list-view {
+.desktop .text-field, .desktop .combo-box-base, .desktop .text-area, .desktop .list-view, .desktop .tree-view {
     -fx-background-color: -csb-paper;
     -fx-background-insets: 0;
     -fx-background-radius: 5px;
@@ -84,7 +84,7 @@
 }
 .desktop .text-input { -fx-text-fill: -csb-ink; -fx-highlight-fill: -csb-selection; -fx-highlight-text-fill: -csb-ink; }
 .desktop .text-field:focused, .desktop .combo-box-base:focused, .desktop .text-area:focused,
-.desktop .list-view:focused {
+.desktop .list-view:focused, .desktop .tree-view:focused {
     -fx-border-color: -csb-focus, -csb-focus;
     -fx-border-insets: -1px, 0;
     -fx-border-radius: 6px, 5px;
@@ -120,16 +120,17 @@
     -fx-padding: 8px 8px 2px;
 }
 
-.desktop .list-cell { -fx-padding: 5px 8px; -fx-text-fill: -csb-ink; -fx-graphic-text-gap: 7px; }
-.desktop .list-cell:filled:hover { -fx-background-color: -csb-surface; }
-.desktop .list-cell:filled:selected, .desktop .list-cell:filled:selected:hover {
+.desktop .list-cell, .desktop .tree-cell { -fx-padding: 5px 8px; -fx-text-fill: -csb-ink; -fx-graphic-text-gap: 7px; }
+.desktop .list-cell:filled:hover, .desktop .tree-cell:filled:hover { -fx-background-color: -csb-surface; }
+.desktop .list-cell:filled:selected, .desktop .list-cell:filled:selected:hover,
+.desktop .tree-cell:filled:selected, .desktop .tree-cell:filled:selected:hover {
     -fx-background-color: -csb-selection;
     -fx-text-fill: -csb-ink;
     -fx-border-color: transparent transparent transparent -csb-accent;
     -fx-border-width: 0 0 0 3px;
     -fx-padding: 5px 8px 5px 5px;
 }
-.desktop .list-view:disabled { -fx-opacity: 0.78; }
+.desktop .list-view:disabled, .desktop .tree-view:disabled { -fx-opacity: 0.78; }
 
 .icon-stroke {
     -fx-fill: transparent;

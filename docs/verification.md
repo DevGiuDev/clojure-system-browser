@@ -7,19 +7,35 @@ were executed from prepared verifications.
 
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
-| Core, including test path and Java VM discovery | 54 | 404 | No failures or errors; JDK 27 |
-| Desktop with headless JavaFX controls | 17 | 162 | No failures or errors; JDK 27 |
-| TUI with virtual terminal | 20 | 245 | No failures or errors; JDK 27 |
-| nREPL and test process integration | 9 | 51 | No failures or errors; JDK 27 |
-| Suite total | **100** | **862** | No failures or errors |
+| Core, including test path and Java VM discovery | 58 | 430 | No failures or errors; JDK 27 |
+| Desktop with headless JavaFX controls | 19 | 203 | No failures or errors; JDK 27 |
+| TUI with virtual terminal | 22 | 271 | No failures or errors; JDK 27 |
+| nREPL and test process integration | 10 | 76 | No failures or errors; JDK 27 |
+| Suite total | **109** | **980** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | **40 checks**, no failures |
+| Production TUI search with PTY | — | — | Shortcut, navigation, scrolling and resize passed |
 | clj-kondo | — | — | 0 errors, 0 warnings |
+
+The [Desktop namespace tree](decisions/020-desktop-namespace-tree.md) was
+verified on Linux with JDK 27. The headless test covers the flat default,
+the empty project state, nested namespaces, filtering, selection and draft
+retention while switching views. Automated clicks on the production window
+under Xvfb verified the checkbox placement, branch collapse and expansion,
+opening a namespace and returning to the flat list with that namespace selected.
 
 Java VM discovery found seven installations on the Linux test machine,
 including Java 21 and 27. A filesystem fixture verifies discovery from the
 environment and installation folders, alias deduplication, version metadata,
 and the exclusion of wrapper scripts and incomplete directories. The Desktop
 dropdown and TUI selector fill an editable path in their automated UI suites.
+
+On 2026-11-22 the TUI project search was verified on Linux with JDK 27. The
+virtual terminal tests cover the empty project state, case-insensitive grouped
+results, relative source paths, query editing, opening namespaces and
+definitions, Esc, and the draft guard. An automated run of the production TUI
+in a POSIX pseudoterminal started at 60 × 16. It verified that `f` opens search
+and can be typed in the query, both kinds of navigation, relative paths,
+scrolling to an off-screen result, selection after a resize and clean exit.
 
 On 2026-11-22 the [namespace filter and project search](decisions/019-desktop-search.md)
 were verified: the core suite covers `csb.service/search` (grouped contract,
@@ -76,6 +92,18 @@ opening a result cannot discard a draft. An automated click-through with the
 normal JavaFX window on Xvfb opened `total-test` from the `total` row and went
 back to `total` from `orders/total` in the editor. The window, menus and results
 were inspected in screenshots from that run.
+
+On 2026-11-22, core tests for the automatic **Uses** panel covered qualified
+names, aliases, explicit refers, occurrence locations and counts, ambiguous
+targets, and index refresh after saving and reloading. Desktop Headless
+covered initial selection, cross-namespace navigation, the draft guard,
+Escape from contextual results, and project switches. Automated interaction
+with the regular JavaFX backend on Xvfb checked the layout at 760 and 1100 px,
+opened `shop.orders-test/total-test` with Enter, and checked the results for
+eight definitions in the 176-namespace `cljgame` project. The core, Desktop
+Headless, virtual TUI and Live suites ran on JDK 27 with the pinned
+dependencies from the local Maven cache. clj-kondo reported zero errors
+and warnings.
 
 The TUI theme appearance is confirmed by the user in Emacs/EXWM. Full manual
 acceptance and review of the highlighting in that session remain pending. The

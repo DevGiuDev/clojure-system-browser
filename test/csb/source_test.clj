@@ -65,6 +65,61 @@
         (is (= ['receipt 'check-total 'pay] (names-for :usages 'cart/total)))
         (is (empty? (names-for :definition 'missing)))))))
 
+(deftest uses-of-an-indexed-definition
+  (with-project
+    {"src/cart.clj" "\uFEFF(ns cart)\r\n(def tax 2)\r\n(defn total [xs]\r\n  (if (seq xs) (+ tax (total (next xs))) 0))"
+     "src/pay.clj" "(ns pay (:require [cart :as c :refer [total]]))
+(defn pay []
+  [(c/total []) total #'cart/total ^:private c/total])
+(defn ignored []
+  [\"c/total\" 'c/total #_(c/total) :c/total (comment (total []))])"
+     "src/other.clj" "(ns other) (defn total [] 0) (defn unrelated [] (total))"
+     "test/cart_test.clj" "(ns cart-test (:require [cart :as c]))\n(deftest check-total (c/total []))"}
+    (fn [root]
+      (let [system (opened root)
+            find-uses (fn [sym]
+                        (let [d (some #(when (= sym (:name %)) %)
+                                      (:value (service/list-definitions system 'cart)))]
+                          (get-in (service/definition-usages system (:id d)) [:value :matches])))]
+        (is (= [['cart 'total 4 1] ['cart-test 'check-total 2 1] ['pay 'pay 3 4]]
+               (mapv (juxt :namespace :name (comp :row :usage-location) :usage-count)
+                     (find-uses 'total))))
+        (is (= [['total 4]]
+               (mapv (juxt :name (comp :row :usage-location)) (find-uses 'tax))))))))
+
+(deftest uses-of-ambiguous-or-unsupported-definitions
+  (with-project
+    {"src/cart.clj" "(ns cart) (defn total [] 1) (defmulti price identity) (defmethod price :default [_] 0)"
+     "src/cart_extra.clj" "(ns cart) (defn total [] 2) (defn invoice [] (total))"
+     "src/pay.clj" "(ns pay (:require [cart :as c])) (defmethod c/price :online [_] 1)"}
+    (fn [root]
+      (let [system (opened root)
+            defs (:value (service/list-definitions system 'cart))
+            lookup (fn [kind sym]
+                     (let [d (some #(when (= [kind sym] ((juxt :kind :name) %)) %) defs)]
+                       (service/definition-usages system (:id d))))]
+        (is (= :ambiguous (get-in (lookup :function 'total) [:value :availability])))
+        (is (empty? (get-in (lookup :function 'total) [:value :matches])))
+        (is (= :ready (get-in (lookup :multimethod 'price) [:value :availability])))
+        (is (= ['price 'c/price] (mapv :name (get-in (lookup :multimethod 'price) [:value :matches]))))
+        (is (= :unsupported (get-in (lookup :method 'price) [:error :type])))))))
+
+(deftest indexed-uses-change-after-saving-and-reloading
+  (with-project {"src/demo.clj" "(ns demo)\n(defn caller [] 0)\n(def given 1)"}
+    (fn [root]
+      (let [system (opened root)
+            file (.resolve root "src/demo.clj")
+            names (fn []
+                    (let [d (second (:value (service/list-definitions system 'demo)))]
+                      (mapv :name (get-in (service/definition-usages system (:id d)) [:value :matches]))))]
+        (is (empty? (names)))
+        (is (= :ok (:status (save system "(defn caller [] given)"))))
+        (is (= ['caller] (names)))
+        (Files/writeString file "(ns demo)\n(defn caller [] 0)\n(def given 1)"
+                           (make-array java.nio.file.OpenOption 0))
+        (is (= :ok (:status (service/refresh! system))))
+        (is (empty? (names)))))))
+
 (deftest search-finds-namespaces-and-definitions-by-name
   (with-project
     {"src/cart.clj" "(ns cart)\n(defn total [] 1)\n(defn- receipt [] :ok)"
@@ -395,16 +450,23 @@
               (finally (Files/setPosixFilePermissions dir permissions)))))))))
 
 (deftest committed-save-is-distinguished-from-a-reindex-error
-  (with-project {"src/demo.clj" "(ns demo) (defn f [] 1)"}
+  (with-project {"src/demo.clj" "(ns demo) (defn f [] given) (def given 1)"}
     (fn [root]
       (let [system (opened root)
+            id (:id (second (:value (service/list-definitions system 'demo))))
             result (with-redefs-fn {#'source/source-files (fn [_] (throw (java.io.IOException. "index failed")))}
                      #(save system "(defn f [] 2)"))]
         (is (= :ok (:status result)))
         (is (true? (get-in result [:value :written?])))
         (is (= "index failed" (get-in result [:value :reindex-error])))
-        (is (= "(ns demo) (defn f [] 2)" (Files/readString (.resolve root "src/demo.clj"))))
-        (is (= (get-in result [:value :revision]) (get-in (last @(:events system)) [:change :after])))))))
+        (is (= "(ns demo) (defn f [] 2) (def given 1)" (Files/readString (.resolve root "src/demo.clj"))))
+        (is (= (get-in result [:value :revision]) (get-in (last @(:events system)) [:change :after])))
+        (is (= :stale (get-in (service/definition-usages system id) [:value :availability])))
+        (is (empty? (get-in (service/definition-usages system id) [:value :matches])))
+        (is (= :stale-index (get-in (service/lookup-symbol system id nil :usages) [:error :type])))
+        (is (= :ok (:status (service/refresh! system))))
+        (is (= :ready (get-in (service/definition-usages system id) [:value :availability])))
+        (is (empty? (get-in (service/definition-usages system id) [:value :matches])))))))
 
 (deftest privacy-is-read-from-headers-not-function-bodies
   (with-project {"src/demo.clj" "(ns demo) (defn f [] \"^:private\") (defn g {:private true} [] 1)"}

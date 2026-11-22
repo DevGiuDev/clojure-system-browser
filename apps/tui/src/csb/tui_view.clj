@@ -10,7 +10,8 @@
             [csb.tests :as tests])
   (:import [com.googlecode.lanterna TerminalPosition TerminalSize TerminalTextUtils TextColor$Indexed]
            [com.googlecode.lanterna.graphics TextGraphics]
-           [com.googlecode.lanterna.screen TerminalScreen Screen$RefreshType]))
+           [com.googlecode.lanterna.screen TerminalScreen Screen$RefreshType]
+           [java.io File]))
 
 ;; Indices above the terminal's configurable ANSI 0–15 palette. No default colours.
 (def ^:private themes
@@ -113,6 +114,7 @@
 
 (def ^:private help
   (str "Tab/Left/Right: focus a list\nUp/Down: select · PgUp/PgDn: scroll source\n"
+       "f: search namespaces and definitions\n"
        "e: edit definition in $EDITOR (external editor)\ns / Ctrl+S: Save · d: Discard · r: Reload\n"
        "t: toggle dark/light theme\nx: example command · v: extension view\n"
        "o: source order (real file order of top-level forms)\n"
@@ -421,6 +423,49 @@
           (doseq [[i line] (map-indexed vector (take (- height 9) lines))]
             (text! g width 1 (+ i 9) line)))))))
 
+(defn- search-result-label [{:keys [namespace name file location]} prefix]
+  (if name
+    (str namespace "/" name " · "
+         (if (str/starts-with? file prefix) (subs file (count prefix)) file)
+         ":" (:row location))
+    (str namespace)))
+
+(defn- search-panel! [screen g palette width height {:keys [system search status status-tone]}]
+  (let [{:keys [query caret results selection]} search
+        root (or (some-> system service/project-info :root) "")
+        prefix (if (str/ends-with? root File/separator) root (str root File/separator))
+        visible (- height 6)
+        rows (->> results
+                  (map-indexed #(assoc %2 :index %1))
+                  (partition-by :category)
+                  (mapcat (fn [[{:keys [category]} :as group]]
+                            (cons {:header (if category
+                                             (str/capitalize (str/replace (name category) "-" " "))
+                                             "Namespaces")}
+                                  group)))
+                  vec)
+        selected-row (first (keep-indexed #(when (= selection (:index %2)) %1) rows))
+        start (max 0 (- (inc (or selected-row 0)) visible))]
+    (bar! g palette width 0 :accent :raised "Project search")
+    (bar! g palette width 1 :muted :background "Namespace or definition name")
+    (input! screen g palette width 1 2 1 query [0 caret])
+    (if (seq rows)
+      (doseq [[line {:keys [header index] :as result}] (map-indexed vector (take visible (drop start rows)))]
+        (let [y (+ 4 line)
+              selected? (= selection index)]
+          (if header
+            (bar! g palette width y :accent :raised header)
+            (bar! g palette width y
+                  (if selected? :selected-text :text) (if selected? :selection :surface)
+                  (str (if selected? "> " "  ") (search-result-label result prefix))))))
+      (bar! g palette width 4 :muted :background
+            (cond (nil? system) "Open a project to search."
+                  (str/blank? query) "Matches any part of a name."
+                  :else "No matches.")))
+    (when (#{:warning :error} status-tone)
+      (bar! g palette width (- height 2) status-tone :raised status))
+    (bar! g palette width (dec height) :muted :background "↑↓: select · Enter: open · Esc: back")))
+
 (defn draw! [^TerminalScreen screen state full?]
   (let [size (.getTerminalSize screen)
         width (.getColumns size) height (.getRows size)
@@ -437,16 +482,17 @@
       (or (< width 60) (< height 16))
       (do (text! g width 0 0 "Resize terminal to at least 60 × 16")
           (when (> height 1) (text! g width 0 1 (if (or (:java-vm-editor state) (:repl-open? state)
-                                                       (get-in state [:tests-view :open?]))
+                                                       (get-in state [:tests-view :open?]) (:search state))
                                                 "Esc: back" "q: quit · t: theme"))))
       (:java-vm-editor state) (java-vm-panel! screen g palette width height (:java-vm-editor state))
       (:repl-open? state) (if (:inspection-open? state)
                             (inspection-panel! g palette width height state)
                             (repl-panel! screen g palette width height state))
       (get-in state [:tests-view :open?]) (tests-panel! g palette width height state tree)
+      (:search state) (search-panel! screen g palette width height state)
       :else
       (do
-        (bar! g palette width 0 :accent :raised "CLOJURE SYSTEM BROWSER · Source World")
+        (bar! g palette width 0 :accent :raised "CLOJURE SYSTEM BROWSER · Source World · f: search")
         (style! g palette :muted :background)
         (text! g width 1 1 (str (or (:namespace state) "No project open")
                                      " / " (case (:category state) :requires "(requires)"

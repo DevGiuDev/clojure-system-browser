@@ -10,7 +10,7 @@
   (:import [java.nio.file Files]
            [javafx.application Platform]
            [javafx.event Event]
-           [javafx.scene.control Button ComboBox ContextMenu Label ListCell ListView MenuItem TextArea TextField]
+           [javafx.scene.control Button CheckBox ComboBox ContextMenu Label ListCell ListView MenuItem TextArea TextField TreeItem TreeView]
            [javafx.scene.layout Region]
            [javafx.scene.input ContextMenuEvent KeyCode KeyEvent]
            [javafx.scene.paint Color]
@@ -402,6 +402,61 @@
            (sync! ui)
            (is (= 2 (fx! #(count (.getItems ^ListView (node stage "#namespaces"))))))))))))
 
+(deftest namespaces-switch-between-flat-and-tree-views
+  (fixture/with-example
+    (fn [root]
+      (fixture/write! (.resolve root "src/shop/orders/extra.clj")
+                      "(ns shop.orders.extra)\n(defn extra [] :extra)\n")
+      (with-window
+        (fn [{:keys [state] :as ui}]
+          (let [stage (sync! ui)
+                toggle! #(do (fx! (fn [] (.fire ^CheckBox (node stage "#namespace-tree-toggle"))))
+                             (sync! ui))]
+            (is (some? (fx! #(node stage "#namespaces"))))
+            (when (is (fx! #(some? (node stage "#namespace-tree-toggle"))))
+              (is (false? (fx! #(.isSelected ^CheckBox (node stage "#namespace-tree-toggle")))))
+              (toggle!)
+              (is (fx! #(let [^TreeView tree (node stage "#namespaces-tree")]
+                          (empty? (.getChildren (.getRoot tree))))))
+              (toggle!)
+              (open! ui root)
+              (total! ui)
+              (edit! ui fixture/total-draft)
+              (toggle!)
+              (is (= 'total (get-in @state [:definition :name])))
+              (is (= fixture/total-draft (source ui)))
+              (is (fx! #(.isDisabled ^TreeView (node stage "#namespaces-tree"))))
+              (session/discard! state)
+              (sync! ui)
+              (fx! #(let [^TreeView tree (node stage "#namespaces-tree")
+                          ^TreeItem shop (first (.getChildren (.getRoot tree)))
+                          ^TreeItem orders (first (.getChildren shop))
+                          ^TreeItem extra (first (.getChildren orders))
+                          selection (.getSelectionModel tree)]
+                      (is (= orders (.getSelectedItem selection)))
+                      (.select selection shop)
+                      (is (= 'shop.orders (:namespace @state)))
+                      (.setExpanded orders false)
+                      (is (= -1 (.getRow tree extra)))
+                      (.setExpanded orders true)
+                      (.select selection extra)))
+              (is (= 'shop.orders.extra (:namespace @state)))
+              (is (str/includes? (source ui) "(defn extra"))
+              (fx! #(.setText ^TextField (node stage "#namespace-filter") "ORDERS-TEST"))
+              (sync! ui)
+              (fx! #(let [^TreeView tree (node stage "#namespaces-tree")
+                          ^TreeItem shop (first (.getChildren (.getRoot tree)))
+                          selection (.getSelectionModel tree)]
+                      (is (= 1 (count (.getChildren shop))))
+                      (is (nil? (.getSelectedItem selection)))
+                      (.select selection ^TreeItem (first (.getChildren shop)))))
+              (is (= 'shop.orders-test (:namespace @state)))
+              (toggle!)
+              (is (= ["shop.orders-test"]
+                     (fx! #(vec (.getItems ^ListView (node stage "#namespaces"))))))
+              (is (= "shop.orders-test"
+                     (fx! #(.getSelectedItem (.getSelectionModel ^ListView (node stage "#namespaces")))))))))))))
+
 (defn- press-shortcut! [ui code character]
   (let [stage (sync! ui)
         mac? (str/includes? (System/getProperty "os.name") "Mac")]
@@ -420,6 +475,57 @@
   (let [stage (sync! ui)]
     (fx! #(.setText ^TextField (node stage "#search-query") text)))
   (sync! ui))
+
+(deftest uses-follow-the-visible-definition
+  (fixture/with-example
+    (fn [root]
+      (with-window
+        (fn [{:keys [state] :as ui}]
+          (let [items (fn []
+                        (let [stage (sync! ui)]
+                          (fx! #(when-let [^ListView results (node stage "#definition-usage-results")]
+                                  (vec (.getItems results))))))]
+            (is (nil? (items)))
+            (open! ui root)
+            (is (= ["shop.orders/receipt"] (mapv :text (items))))
+            (total! ui)
+            (when (is (= ["shop.orders/receipt" "shop.orders-test/total-test"] (mapv :text (items))))
+              (is (= ["src/shop/orders.clj:16" "test/shop/orders_test.clj:6"] (mapv :detail (items))))
+              (select! ui "#definition-usage-results" "shop.orders-test/total-test")
+              (edit! ui fixture/total-draft)
+              (press-key! ui "#definition-usage-results" KeyCode/ENTER)
+              (is (= 'total (get-in @state [:definition :name])))
+              (is (= fixture/total-draft (source ui)))
+              (fire! ui "Discard")
+              (press-key! ui "#definition-usage-results" KeyCode/ENTER)
+              (is (= 'total-test (get-in @state [:definition :name])))
+              (is (nil? (items)))
+
+              (press-shortcut! ui KeyCode/F "f")
+              (type-search! ui "shop.orders/total")
+              (press-key! ui "#search-query" KeyCode/ENTER)
+              (is (= ["shop.orders/receipt" "shop.orders-test/total-test"] (mapv :text (items))))
+              (is (context-action! ui "#definitions" "Find related tests"))
+              (is (nil? (items)))
+              (press-key! ui "#symbol-results" KeyCode/ESCAPE)
+              (is (= 2 (count (items))))
+
+              (select! ui "#definitions" "receipt ·")
+              (let [stage (sync! ui)]
+                (is (= "No uses found in the indexed project."
+                       (fx! #(.getText ^Label (node stage "#definition-uses-status"))))))
+              (select! ui "#definitions" "discount ·")
+              (select! ui "#definitions" "total ·")
+              (is (= 2 (count (items))))
+              (fixture/with-example
+                (fn [other]
+                  (fixture/write! (.resolve other "src/shop/orders.clj") "(ns shop.orders)\n(defn total [] 1)")
+                  (fixture/write! (.resolve other "test/shop/orders_test.clj") "(ns shop.orders-test)")
+                  (open! ui other)
+                  (is (nil? (items)))
+                  (let [stage (sync! ui)]
+                    (is (= "No uses found in the indexed project."
+                           (fx! #(.getText ^Label (node stage "#definition-uses-status")))))))))))))))
 
 (deftest shortcut-search-opens-categorized-results-and-navigates
   (fixture/with-example

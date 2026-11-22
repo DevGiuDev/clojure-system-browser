@@ -26,6 +26,13 @@ the query field, and Esc or a click on the scrim closes the panel. Opening
 a result goes through the reveal path, which reselects the namespace and
 clears the definition filter.
 
+The TUI opens a dedicated search view with `f` from the source browser.
+The query keeps focus while Up and Down move through the grouped results.
+Enter opens a result through the session, including when the selected
+namespace is already active. A pending draft keeps the view and selection
+open and displays the navigation warning. Esc returns to the previous source
+view. The header and keyboard help show the shortcut.
+
 The search runs synchronously on the UI thread: it is an in-memory scan of
 the snapshot, like the reads the view already performs, and avoids the
 busy/disable flicker of the worker queue on every keystroke.

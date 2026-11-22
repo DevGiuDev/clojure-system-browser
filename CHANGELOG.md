@@ -10,6 +10,17 @@ project is 0.x, minor bumps carry features and the MVP stays free to evolve.
 
 ### Added
 
+- Modal project search for namespaces and definitions in the TUI. Press `f`
+  to open it.
+- The **Tree** checkbox next to **Namespaces** in Desktop switches between
+  the default flat list and expandable branches grouped by dots. Switching
+  preserves the filter, selection and draft.
+- Automatic **Uses** panel in Desktop: beside the source of the selected
+  function, var, macro or multimethod it lists the definitions that reference
+  it, with the relative file, the line of the first use and a count when there
+  are several. Contextual lookup results take the pane back while open,
+  ambiguous names show a note, and a save whose reindex fails marks uses stale
+  until Reload (ADR 015).
 - Desktop and TUI support Lazytest suites, with source navigation, scoped runs
   and results for each `defdescribe`. The
   [Lazytest sample project](examples/lazytest-sample-project/README.md) shows

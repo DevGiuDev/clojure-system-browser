@@ -13,8 +13,8 @@ captures below browse the same real external project (176 namespaces).
 |---|---|
 | ![Desktop client: namespaces, category facets and the selected definition with syntax highlighting in the editor](docs/img/desktop.png) | ![TUI client: the same navigation and code panel in a 256-color terminal](docs/img/tui.png) |
 
-The Desktop quick-open search (Ctrl+F / Cmd+F) matches names only, never
-definition bodies:
+Press `f` in the TUI to search namespace and definition names. Desktop opens
+its search overlay with Ctrl+F or Cmd+F.
 
 ![Desktop search overlay: results grouped as Namespaces, Functions and Private functions over a dimmed main window](docs/img/desktop-search.png)
 
@@ -57,10 +57,12 @@ from a checkout as described in [Requirements and versions](#requirements-and-ve
   aliases, options and reader conditionals.
 - Desktop (`cljfx`/JavaFX): project opening, navigation, filtering, a code editor
   with syntax highlighting, selection, undo/redo and Save/Discard/Reload.
+  The **Uses** panel beside the code follows the selected function, var, macro
+  or multimethod and lists the definitions that reference it.
   Context menus in the editor and **Definitions** open a definition or find
   symbol uses and related tests. Tested with real JavaFX 27 headless controls.
-- TUI (Lanterna): navigation, resizing, dark/light themes, syntax highlighting
-  shared with Desktop, updates only when something changes, external editing,
+- TUI (Lanterna): navigation, project search, resizing, dark/light themes,
+  syntax highlighting shared with Desktop, updates only on changes, external editing,
   Save/Ctrl+S and draft recovery. Tested with a virtual terminal and real Vim in
   a PTY, including quoted editor commands and visible failure details. The user
   confirms that the theme is readable in Emacs/EXWM, and on 2026-11-21 confirmed
@@ -214,15 +216,19 @@ formats.
    `orders/total` in the editor and choose **Go to definition**. The menu uses
    the definition name when there is no symbol under the pointer. With the
    keyboard, open the context menu at the caret or on the selected row.
-9. Type in the filter boxes above **Namespaces** and **Definitions** to narrow
-   those lists; clearing them restores every entry. Press Ctrl+F / Cmd+F
-   anywhere: a centered search
-   panel lists matches grouped as Namespaces first and then definition
-   categories (Functions, Values, Tests…), matching namespace names and
-   qualified `namespace/name` strings case-insensitively. ↑/↓ move the
-   selection, Enter opens the namespace or definition under the same draft
-   guards as the lists, and Esc or a click on the dimmed background closes the
-   panel. Search matches names only and never reads definition bodies.
+   The **Uses** panel for `total` shows `receipt` and `total-test`, each with
+   the file and line of its first use. Press Enter on a row to open that
+   definition. Closing contextual results brings back the automatic list.
+9. In Desktop, type in the filter boxes above **Namespaces** and **Definitions**
+   to narrow those lists. Clear a filter to restore all entries. Check **Tree**
+   next to **Namespaces** to group names by their dot-separated segments.
+   Uncheck it to return to the flat list.
+10. From the source browser, press `f` in the TUI or Ctrl+F / Cmd+F in Desktop.
+    Type part of a namespace name or a qualified `namespace/name`.
+    Matches ignore case and show namespaces before definition categories.
+    Use ↑/↓ to select, Enter to open and Esc to close. Save or discard a pending
+    draft before opening a result. In Desktop, clicking the background also
+    closes the panel.
 
 Navigation, reload, opening another project and normal exit are blocked while
 there is a draft to save or discard. Desktop disables the lists while a draft

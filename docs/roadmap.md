@@ -2,14 +2,15 @@
 
 ## Navigation and search — 2026-11-22
 
-The Desktop namespace panel gained a substring filter, and Ctrl+F / Cmd+F
-opens a centered search overlay over the whole project: results are grouped
-(namespaces first, then definition categories), Enter opens them through the
-usual draft guards, and arrows/Esc/scrim drive the panel. The matching is a
-service use case (`csb.service/search`), so the TUI can adopt it later
-without core changes; it matches names only. See
-[ADR 019](decisions/019-desktop-search.md) and
-[verification](verification.md).
+Desktop has substring filters in the Namespaces and Definitions columns.
+The Namespaces heading has a **Tree** checkbox for browsing dot-separated
+namespace names in expandable branches. The flat list opens by default.
+See [ADR 020](decisions/020-desktop-namespace-tree.md).
+Project-wide search opens with `f` in the TUI and Ctrl+F / Cmd+F in Desktop.
+Both use `csb.service/search` to match names, group
+namespaces before definition categories, and open results through the usual
+draft guards. The TUI uses a dedicated search view with keyboard navigation.
+See [ADR 019](decisions/019-desktop-search.md) and [verification](verification.md).
 
 ## Live World — 2026-11-21
 

@@ -2,8 +2,12 @@
   (:require [cljfx.api :as fx]
             [cljfx.composite :as composite]
             [cljfx.ext.list-view :as list-view]
+            [cljfx.ext.tree-view :as tree-view]
             [cljfx.fx.list-cell :as list-cell]
+            [cljfx.fx.tree-cell :as tree-cell]
             [cljfx.lifecycle :as lifecycle]
+            [cljfx.mutator :as mutator]
+            [cljfx.prop :as prop]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [csb.cli :as cli]
@@ -18,7 +22,7 @@
             [csb.tests :as tests])
   (:import [javafx.application Platform]
            [javafx.beans.value ChangeListener]
-           [javafx.scene.control ListCell TextArea TextField]
+           [javafx.scene.control ListCell TextArea TextField TreeCell TreeItem TreeView]
            [javafx.scene.input KeyCode KeyEvent MouseEvent]
            [javafx.stage DirectoryChooser WindowEvent]
            [java.util.concurrent Executors ExecutorService]))
@@ -75,26 +79,98 @@
    :props (merge list-cell/props
                  (composite/props ListCell :accessible-text [:setter lifecycle/scalar]))})
 
-(defn- with-test-status [list-desc item-status]
+(defn- test-status-cell [text accessible-text status]
+  (if status
+    (let [[tone icon] (get test-appearance status [:neutral :idle])
+          label (tests/status-label status)]
+      {:text text :accessible-text (str accessible-text " · " label)
+       :tooltip {:fx/type :tooltip :text label}
+       :graphic (update (icons/graphic icon) :style-class conj (tone-class tone))})
+    {:text text :accessible-text accessible-text}))
+
+(defn- with-test-status [items-desc item-status]
   (assoc-in
-   list-desc
-   [:children 1 :desc :cell-factory]
+   items-desc
+   [:desc :cell-factory]
    {:fx/cell-type accessible-cell :describe
     (fn [item]
-      (if-let [status (some-> item item-status)]
-        (let [[tone icon] (get test-appearance status [:neutral :idle])
-              label (tests/status-label status)]
-          {:text item :accessible-text (str item " · " label)
-           :tooltip {:fx/type :tooltip :text label}
-           :graphic (update (icons/graphic icon) :style-class conj (tone-class tone))})
-        {:text item}))}))
+      (test-status-cell item item (some-> item item-status)))}))
 
-(defn- namespace-list [id title values selected on-change disabled? state test-tree]
-  (with-test-status (selection-list id title :layers values selected str on-change disabled?)
-    (fn [item]
-      (let [ns-sym (symbol item)]
-        (when-let [definitions (get test-tree ns-sym)]
-          (tests/namespace-status state ns-sym definitions))))))
+(defn- namespace-status [state test-tree ns-sym]
+  (when-let [definitions (get test-tree ns-sym)]
+    (tests/namespace-status state ns-sym definitions)))
+
+(defn- namespace-items [id values selected on-change disabled? state test-tree]
+  (with-test-status (selectable-items id values selected str on-change disabled?)
+    #(namespace-status state test-tree (symbol %))))
+
+(def ^:private accessible-tree-cell
+  {:ctor #(TreeCell.)
+   :props (merge tree-cell/props
+                 (composite/props TreeCell :accessible-text [:setter lifecycle/scalar]))})
+
+(defn- namespace-tree-item [segment {:keys [children namespace]} status]
+  {:fx/type :tree-item :expanded true
+   :value {:text segment :namespace namespace :status (when namespace (status namespace))}
+   :children (mapv (fn [[label node]]
+                     (assoc (namespace-tree-item label node status) :fx/key label))
+                   (sort-by key children))})
+
+(defn- namespace-branches [namespaces]
+  (reduce (fn [root ns-sym]
+            (let [segments (str/split (str ns-sym) #"\." -1)]
+              (update-in root (interleave (repeat :children) segments) assoc :namespace ns-sym)))
+          {} namespaces))
+
+(defn- select-tree-namespace! [^TreeView tree [namespaces selected]]
+  (let [model (.getSelectionModel tree)
+        ^TreeItem item (when (some #{selected} namespaces)
+                         (some #(when (= selected (:namespace (.getValue ^TreeItem %))) %)
+                               (tree-seq (fn [^TreeItem item] (not (.isLeaf item)))
+                                         (fn [^TreeItem item] (.getChildren item))
+                                         (.getRoot tree))))]
+    (if item
+      (do
+        (doseq [^TreeItem parent (take-while some? (iterate #(.getParent ^TreeItem %) (.getParent item)))]
+          (.setExpanded parent true))
+        (.select model item)
+        (.scrollTo tree (.getRow tree item)))
+      (.clearSelection model))))
+
+(def ^:private namespace-tree-selection
+  (fx/make-ext-with-props
+   {:selection (prop/make (mutator/setter select-tree-namespace!) lifecycle/scalar)}))
+
+(defn- namespaces-tree [namespaces state actions disabled? test-tree]
+  {:fx/type namespace-tree-selection :v-box/vgrow :always
+   :props {:selection [namespaces (:namespace state)]}
+   :desc {:fx/type tree-view/with-selection-props
+          :props {:on-selected-item-changed
+                  (fn [^TreeItem item]
+                    (when-let [ns-sym (some-> item .getValue :namespace)]
+                      ((:namespace actions) ns-sym)))}
+          :desc {:fx/type :tree-view :id "namespaces-tree" :show-root false
+                 :disable (boolean disabled?)
+                 :root (namespace-tree-item nil (namespace-branches namespaces)
+                                            #(namespace-status state test-tree %))
+                 :cell-factory {:fx/cell-type accessible-tree-cell
+                                :describe (fn [{:keys [text namespace status]}]
+                                            (test-status-cell text (if namespace (str namespace) text) status))}}}})
+
+(defn- namespaces-panel [namespaces state actions disabled? test-tree]
+  {:fx/type :v-box :spacing 6 :pref-width 280 :h-box/hgrow :always
+   :children [(filter-box "namespace-filter" "Filter namespaces…"
+                          (get state :namespace-filter "") (:namespace-filter actions))
+              {:fx/type :h-box :spacing 8 :alignment :center-left
+               :children [(heading "Namespaces" :layers)
+                          {:fx/type :check-box :id "namespace-tree-toggle" :text "Tree"
+                           :accessible-help "Show namespaces as a tree"
+                           :selected (boolean (:namespace-tree? state))
+                           :on-selected-changed (:namespace-tree actions)}]}
+              (if (:namespace-tree? state)
+                (namespaces-tree namespaces state actions disabled? test-tree)
+                (namespace-items "namespaces" namespaces (:namespace state)
+                                 (:namespace actions) disabled? state test-tree))]})
 
 (def ^:private definition-icons
   {:function :function :macro :macro :value :value :test :tests})
@@ -144,11 +220,13 @@
      [{:fx/type :split-pane :orientation :vertical :divider-positions [0.38] :v-box/vgrow :always
        :items
        [{:fx/type :h-box :spacing 12 :min-height 90
-         :children [(namespace-list "test-namespaces" "Test namespaces" namespaces ns-sym
-                                    (:test-namespace actions) false state tree)
-                    (with-test-status (selection-list "test-definitions" "Tests" :tests definitions selected
-                                                      (comp str :name) (:test-definition actions) false)
-                      #(tests/case-status state ns-sym (symbol %)))]}
+         :children [{:fx/type :v-box :spacing 6 :h-box/hgrow :always :pref-width 280
+                     :children [(heading "Test namespaces" :layers)
+                                (namespace-items "test-namespaces" namespaces ns-sym
+                                                 (:test-namespace actions) false state tree)]}
+                    (update-in (selection-list "test-definitions" "Tests" :tests definitions selected
+                                               (comp str :name) (:test-definition actions) false)
+                               [:children 1] with-test-status #(tests/case-status state ns-sym (symbol %)))]}
         {:fx/type :v-box :spacing 8 :min-height 100
          :children
          [{:fx/type :h-box :spacing 8
@@ -285,29 +363,67 @@
                         :text "Enter opens · ↑ ↓ navigates · Esc closes"}
                        (button "Close" (:close-search actions) false)]}]))}]}))
 
-(defn- symbol-panel [{:keys [system symbol-results busy? dirty?]} actions]
-  (let [{:keys [action symbol matches selection]} symbol-results
+(defn- automatic-usages [{:keys [system definition category source-order? tests-view symbol-results usage-selection]}]
+  (when (and system definition (not= :requires category)
+             (not (or source-order? (:open? tests-view) symbol-results)))
+    (when-let [{:keys [matches index-version] :as result}
+               (:value (service/definition-usages system (:id definition)))]
+      (let [context [index-version (:id definition)]
+            [selected-context selected-id] usage-selection
+            selected (when (= context selected-context)
+                       (some #(when (= selected-id (:id %)) %) matches))]
+        (assoc result :usage-context context :selection (or selected (first matches)))))))
+
+(defn- usage-cell [{:keys [text detail]}]
+  (let [full-text (str text " · " detail)]
+    {:accessible-text full-text
+     :tooltip {:fx/type :tooltip :text full-text}
+     :graphic {:fx/type :v-box
+               :children [{:fx/type :label :text text :max-width 204}
+                          {:fx/type :label :text detail :max-width 204
+                           :style-class ["label" "secondary-text"]}]}}))
+
+(defn- symbol-panel [{:keys [system busy? dirty?]} actions results]
+  (let [{:keys [action symbol matches selection availability usage-context]} results
         root (:root (service/project-info system))
-        label (fn [{:keys [namespace name file location]}]
-                (str namespace "/" name " · "
-                     (str/replace-first file (str root java.io.File/separator) "") ":" (:row location)))
+        prefix (if (str/ends-with? root java.io.File/separator) root (str root java.io.File/separator))
+        label (fn [{:keys [namespace name file location usage-location usage-count]}]
+                (let [title (str namespace "/" name)
+                      row (:row (if usage-context usage-location location))
+                      detail (str (str/replace-first file prefix "") ":" row)]
+                  (if usage-context
+                    {:text title :detail (cond-> detail (> usage-count 1) (str " · " usage-count " uses"))}
+                    (str title " · " detail))))
         blocked? (or busy? dirty? (nil? selection))
-        open (:open-symbol-result actions)]
-    {:fx/type :v-box :spacing 8 :style-class ["workspace-panel" "symbol-panel"] :pref-width 350
+        select (if usage-context #((:select-definition-usage actions) usage-context %) (:select-symbol-result actions))
+        open (if usage-context #((:open-definition-usage actions) usage-context) (:open-symbol-result actions))
+        title (if usage-context "Uses" ({:definition "Definitions" :usages "Symbol uses" :tests "Related tests"} action))
+        message (case availability
+                  :stale "Reload the project to refresh its uses."
+                  :ambiguous "Multiple definitions share this name."
+                  :ready "No uses found in the indexed project."
+                  "No matches in the indexed project.")]
+    {:fx/type :v-box :spacing 8 :style-class ["workspace-panel" "symbol-panel"]
+     :pref-width (if usage-context 248 350)
      :children
-     [(assoc (heading (str ({:definition "Definitions" :usages "Symbol uses" :tests "Related tests"} action)
-                           " · " symbol) :search) :wrap-text true)
-      (if (seq matches)
-        (assoc-in (selectable-items "symbol-results" matches selection label (:select-symbol-result actions) busy?)
-                  [:desc :on-key-pressed]
-                  (fn [^KeyEvent event]
-                    (when (and (not blocked?) (= KeyCode/ENTER (.getCode event)))
-                      (.consume event)
-                      (open))))
-        {:fx/type :label :text "No matches in the indexed project."})
-      {:fx/type :h-box :spacing 8
-       :children [(button "Open definition" open blocked? {:icon :definition :primary? (not blocked?)})
-                  (button "Close" (:close-symbol-results actions) false)]}]}))
+     (cond-> [(assoc (heading (str title " · " symbol) :search) :wrap-text true)
+              (if (seq matches)
+                (cond-> (assoc-in (selectable-items (if usage-context "definition-usage-results" "symbol-results")
+                                                  matches selection label select busy?)
+                                  [:desc :on-key-pressed]
+                                  (fn [^KeyEvent event]
+                                    (cond
+                                      (and (not blocked?) (= KeyCode/ENTER (.getCode event)))
+                                      (do (.consume event) (open))
+
+                                      (and (nil? usage-context) (= KeyCode/ESCAPE (.getCode event)))
+                                      (do (.consume event) ((:close-symbol-results actions))))))
+                  usage-context (assoc-in [:desc :cell-factory] {:fx/cell-type accessible-cell :describe usage-cell}))
+                {:fx/type :label :id (when usage-context "definition-uses-status") :text message :wrap-text true})]
+       (or (seq matches) (nil? usage-context))
+       (conj {:fx/type :h-box :spacing 8
+              :children (cond-> [(button "Open definition" open blocked? {:icon :definition :primary? (not blocked?)})]
+                          (nil? usage-context) (conj (button "Close" (:close-symbol-results actions) false)))}))}))
 
 (defn- inspection-panel [state actions]
   (let [{:keys [phase active inspection interrupt?]} (:repl state)
@@ -443,6 +559,7 @@
   (let [{:keys [definition draft dirty? system busy?]} state
         requires? (= :requires (:category state))
         failure (when-not requires? (tests/source-failure state definition))
+        symbol-results (or (:symbol-results state) (automatic-usages state))
         test-tree (tests/targets state)
         tests-open? (get-in state [:tests-view :open?])
         defs (filterv #(str/includes? (str/lower-case (str (:name %)))
@@ -494,12 +611,7 @@
                         (cond->
                          [{:fx/type :h-box :spacing 12 :min-height 140 :style-class ["workspace-panel"]
                            :children
-                          [{:fx/type :v-box :spacing 6 :pref-width 280 :h-box/hgrow :always
-                            :children [(filter-box "namespace-filter" "Filter namespaces…"
-                                                   (get state :namespace-filter "") (:namespace-filter actions))
-                                       (dissoc (namespace-list "namespaces" "Namespaces" nss (:namespace state)
-                                                               (:namespace actions) (or busy? dirty?) state test-tree)
-                                               :h-box/hgrow)]}
+                          [(namespaces-panel nss state actions (or busy? dirty?) test-tree)
                             (let [cats (session/categories state)]
                               (selection-list "categories"
                                               (str "Categories"
@@ -554,7 +666,7 @@
                                              (status-label "editor-access"
                                                            (str "Read only" (when read-only-reason (str " · " read-only-reason)) " · " path)
                                                            nil :lock))))))})}
-                            (:symbol-results state) (assoc :right (symbol-panel state actions)))]
+                            symbol-results (assoc :right (symbol-panel state actions symbol-results)))]
                           (:repl-open? state) (conj (repl-panel state actions))))}
                      :bottom (status-bar state)}]
         (if (:search state)
@@ -620,9 +732,20 @@
       :select-symbol-result #(swap! state assoc-in [:symbol-results :selection] %)
       :open-symbol-result #(when-let [id (get-in @state [:symbol-results :selection :id])]
                              (when-not (:busy? @state) (open-result! id)))
+      :select-definition-usage (fn [context row]
+                                 (swap! state (fn [s]
+                                                (if (= context (:usage-context (automatic-usages s)))
+                                                  (assoc s :usage-selection [context (:id row)])
+                                                  s))))
+      :open-definition-usage (fn [context]
+                               (let [s @state
+                                     {:keys [usage-context selection]} (automatic-usages s)]
+                                 (when (and (not (:busy? s)) (= context usage-context) selection)
+                                   (open-result! (:id selection)))))
       :edit #(session/edit! state %)
       :filter #(swap! state assoc :filter %)
       :namespace-filter #(swap! state assoc :namespace-filter %)
+      :namespace-tree #(swap! state assoc :namespace-tree? %)
       :open-search #(when-not (:search @state)
                       (swap! state assoc :search {:open? true :query ""
                                                   :results {:namespaces [] :definitions []}

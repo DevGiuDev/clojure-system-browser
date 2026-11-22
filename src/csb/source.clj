@@ -220,11 +220,26 @@
               parts))
     (when (n/inner? node) (significant node))))
 
-(defn definition-symbols
-  "Symbols in the body of an indexed definition, with quoted and discarded forms omitted."
-  [definition]
-  (into #{} (comp (mapcat #(tree-seq n/inner? symbol-children %)) (keep leaf-symbol))
-        (drop 2 (list-parts (first (significant (parse (:source definition))))))))
+(defn qualify-symbol
+  "Qualify `sym` using the indexed namespace, aliases and explicit refers for a file."
+  [{:keys [aliases refers] home :namespace} sym]
+  (let [target (if-let [prefix (some-> sym namespace symbol)]
+                 (get aliases prefix prefix)
+                 (get refers sym home))]
+    (symbol (some-> target str) (name sym))))
+
+(defn- definition-usages [context node kind]
+  (let [parts (drop (if (= :method kind) 1 2) (list-parts node))
+        tokens (mapcat #(tree-seq n/inner? symbol-children %) parts)]
+    (reduce (fn [usages token]
+              (if-let [sym (when (= :token (n/tag token)) (leaf-symbol token))]
+                (let [target (qualify-symbol context sym)]
+                  (if (contains? usages target)
+                    (update-in usages [target :usage-count] inc)
+                    (assoc usages target {:usage-location (select-keys (meta token) [:row :col])
+                                          :usage-count 1})))
+                usages))
+            {} tokens)))
 
 (defn- private-map? [node]
   (and node (= :map (n/tag node))
@@ -275,8 +290,12 @@
      :preview (preview-line body start)}))
 
 (defn document
-  "Index supported top-level constructs. Nested and discarded forms are never writable."
-  [file ^bytes bytes]
+  "Index supported top-level constructs. Nested and discarded forms are never writable.
+
+   | Option | Description |
+   | --- | --- |
+   | `:index-usages?` | Collect structural references for the project scan. |"
+  [file ^bytes bytes & [{:keys [index-usages?]}]]
   (let [text (decode bytes)
         bom? (str/starts-with? text "\uFEFF")
         body (if bom? (subs text 1) text)
@@ -287,6 +306,7 @@
                  (some-> ns-nodes first list-parts second leaf-symbol))
         ns-node (when ns-sym (first ns-nodes))
         bindings (namespace-bindings ns-node)
+        symbol-context (assoc (select-keys bindings [:aliases :refers]) :namespace ns-sym)
         editable-document? (and (= 1 (count ns-nodes)) ns-sym)
         rev (revision bytes)
         definitions
@@ -326,7 +346,12 @@
                              (when (contains? def-ordinals ordinal) [(str file) ordinal])))
                nodes)]
     {:file (str file) :namespace ns-sym :aliases (:reader-aliases bindings)
-     :symbol-context (assoc (select-keys bindings [:aliases :refers]) :namespace ns-sym)
+     :symbol-context symbol-context
+     :symbol-usages (when (and index-usages? ns-sym)
+                      (into []
+                            (for [{:keys [id kind]} definitions
+                                  [sym usage] (definition-usages symbol-context (nodes (second id)) kind)]
+                              [sym (assoc usage :id id)])))
      :requires (requires-declarations body ns-node)
      :revision rev :text text :bytes bytes
      :error (when-not ns-sym
@@ -438,35 +463,51 @@
                      @found))))
        distinct (sort-by str) vec))
 
+(defn- indexed-usages [documents definitions-by-id]
+  (let [order (juxt (comp str :namespace) (comp str :name) :file (comp :row :location))]
+    (-> (reduce (fn [usages [sym {:keys [id] :as usage}]]
+                  (let [definition (definitions-by-id id)
+                        entry (merge (select-keys definition [:namespace :name :file :location :kind]) usage)]
+                    (update usages sym (fnil conj []) entry)))
+                {} (mapcat :symbol-usages documents))
+        (update-vals #(vec (sort-by order %))))))
+
 (defrecord DiskSource [root roots index lock]
   m/SourceStore
   (scan-project [_]
     (locking lock
       (let [files (source-files roots)
             results (mapv (fn [^Path file]
-                            (let [result (m/attempt #(document file (Files/readAllBytes file)))]
+                            (let [result (m/attempt #(document file (Files/readAllBytes file) {:index-usages? true}))]
                               (if (= :ok (:status result)) (:value result)
                                   {:file (str file) :error (:error result)}))) files)
             defs (vec (mapcat :definitions results))
             duplicates (frequencies (map (juxt :namespace :name) defs))
             defs (mapv #(if (> (get duplicates [(:namespace %) (:name %)]) 1)
-                          (assoc % :writable? false :read-only-reason "Ambiguous definition across source roots") %) defs)]
-        (reset! index (into {} (map (juxt :id identity) defs)))
-        {:root (str root) :roots (mapv str roots) :definitions defs
-         :namespaces (->> results (keep :namespace) distinct (sort-by str) vec)
-         :requires (->> results
-                        (keep (fn [{:keys [file namespace requires]}]
-                                (when (seq requires)
-                                  {:namespace namespace :file file :declarations requires})))
-                        (group-by :namespace))
-         :symbol-contexts (into {} (keep (fn [{:keys [file symbol-context]}]
-                                           (when (:namespace symbol-context) [file symbol-context])))
-                                results)
-         :diagnostics (vec (keep #(when (:error %) (select-keys % [:file :error])) results))
-         ;; Parse-failed results have no :forms and stay in :diagnostics.
-         :source-forms (vec (keep #(when (contains? % :forms)
-                                     (select-keys % [:file :namespace :forms]))
-                                  results))})))
+                          (assoc % :writable? false :read-only-reason "Ambiguous definition across source roots") %) defs)
+            definitions-by-id (into {} (map (juxt :id identity) defs))
+            snapshot
+            {:root (str root) :roots (mapv str roots) :definitions defs
+             :index-version (random-uuid)
+             :definitions-by-id definitions-by-id
+             :definitions-by-name (group-by (juxt :namespace (comp name :name)) defs)
+             :namespaces (->> results (keep :namespace) distinct (sort-by str) vec)
+             :requires (->> results
+                            (keep (fn [{:keys [file namespace requires]}]
+                                    (when (seq requires)
+                                      {:namespace namespace :file file :declarations requires})))
+                            (group-by :namespace))
+             :symbol-contexts (into {} (keep (fn [{:keys [file symbol-context]}]
+                                               (when (:namespace symbol-context) [file symbol-context])))
+                                    results)
+             :symbol-usages (indexed-usages results definitions-by-id)
+             :diagnostics (vec (keep #(when (:error %) (select-keys % [:file :error])) results))
+             ;; Parse-failed results have no :forms and stay in :diagnostics.
+             :source-forms (vec (keep #(when (contains? % :forms)
+                                         (select-keys % [:file :namespace :forms]))
+                                      results))}]
+        (reset! index definitions-by-id)
+        snapshot)))
   (definition-source [_ id]
     (or (get @index id) (m/fail! :not-found "Definition no longer exists; reload the project" {:id id})))
   (save-source! [this id new-source {:keys [expected-revision]}]

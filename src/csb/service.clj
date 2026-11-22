@@ -118,14 +118,40 @@
   (let [lock (:operation-lock system)]
     (m/attempt #(locking lock (m/definition-source (:store system) id)))))
 
-(defn- qualify-symbol [{:keys [aliases refers] home :namespace} sym]
-  (let [target (if-let [prefix (some-> sym namespace symbol)]
-                 (get aliases prefix prefix)
-                 (get refers sym home))]
-    (symbol (some-> target str) (name sym))))
-
 (defn- definition-symbol [{:keys [namespace name]}]
   (symbol (some-> namespace str) (clojure.core/name name)))
+
+(defn- indexed-definition [snapshot id]
+  (or (get-in snapshot [:definitions-by-id id])
+      (m/fail! :not-found "Definition no longer exists; reload the project" {:id id})))
+
+(defn- symbol-definitions [snapshot target]
+  (let [target-key [(some-> target namespace symbol) (name target)]]
+    (remove #(#{:method :extension} (:kind %))
+            (get-in snapshot [:definitions-by-name target-key]))))
+
+(defn definition-usages
+  "Return structural uses of the indexed definition at `id` in `system`.
+
+   Each row in `:matches` identifies the enclosing definition and carries
+   `:usage-location` for its first use and `:usage-count` for all uses in that
+   definition. `:availability` is `:ready`, `:ambiguous` or `:stale`.
+   `:index-version` identifies the snapshot used to build the result."
+  [system id]
+  (m/attempt
+   (fn []
+     (let [snapshot @(:snapshot system)
+           definition (indexed-definition snapshot id)]
+       (when-not (and (:namespace definition)
+                      (#{:function :value :macro :multimethod} (:kind definition)))
+         (m/fail! :unsupported "This definition has no automatic usage lookup" {:id id}))
+       (let [target (definition-symbol definition)
+             availability (cond
+                            (:usage-index-stale? snapshot) :stale
+                            (next (symbol-definitions snapshot target)) :ambiguous
+                            :else :ready)]
+         {:symbol target :index-version (:index-version snapshot) :availability availability
+          :matches (if (= :ready availability) (get-in snapshot [:symbol-usages target] []) [])})))))
 
 (defn lookup-symbol
   "Find `:definition`, `:usages` or `:tests` for `sym` relative to the indexed `context-id`.
@@ -133,34 +159,30 @@
   [system context-id sym action]
   (m/attempt
    (fn []
-     (let [{:keys [definitions symbol-contexts]} @(:snapshot system)
-           context (some #(when (= context-id (:id %)) %) definitions)]
-       (when-not context
-         (m/fail! :not-found "Definition no longer exists; reload the project" {:id context-id}))
+     (let [{:keys [symbol-contexts symbol-usages usage-index-stale?] :as snapshot} @(:snapshot system)
+           context (indexed-definition snapshot context-id)]
        (when-not (and (contains? #{:definition :usages :tests} action) (or (nil? sym) (symbol? sym)))
          (m/fail! :unsupported "Expected a symbol and a source lookup action" {:action action}))
-       (let [target (if sym (qualify-symbol (symbol-contexts (:file context)) sym)
+       (when (and usage-index-stale? (#{:usages :tests} action))
+         (m/fail! :stale-index "Reload the project to refresh its uses" {}))
+       (let [target (if sym (source/qualify-symbol (symbol-contexts (:file context)) sym)
                         (definition-symbol context))
-             usage? (fn [d]
-                      (let [bindings (symbol-contexts (:file d))]
-                        (and bindings (str/includes? (:source d) (name target))
-                             (some #(= target (qualify-symbol bindings %)) (source/definition-symbols d)))))
-             matches? (case action
-                        :definition #(and (not (#{:method :extension} (:kind %)))
-                                          (= target (definition-symbol %)))
-                        :usages usage?
-                        :tests #(and (= :test (:kind %)) (usage? %)))]
+             usages (symbol-usages target)
+             matches (case action
+                       :definition (sort-by (juxt :file (comp :row :location))
+                                            (symbol-definitions snapshot target))
+                       :usages usages
+                       :tests (filter #(= :test (:kind %)) usages))]
          {:symbol target
-          :matches (->> definitions (filter matches?)
-                        (sort-by (juxt (comp str :namespace) (comp str :name) :file (comp :row :location)))
-                        (mapv #(select-keys % [:id :namespace :name :file :location])))})))))
+          :matches (mapv #(select-keys % [:id :namespace :name :file :location]) matches)})))))
 
 (defn save-definition! [system id new-source options]
   (let [lock (:operation-lock system)]
     (m/attempt
    #(locking lock
       (let [result (m/save-source! (:store system) id new-source options)]
-        (when-not (:reindex-error result)
+        (if (:reindex-error result)
+          (swap! (:snapshot system) assoc :usage-index-stale? true :index-version (random-uuid))
           (reset! (:snapshot system) (:snapshot result)))
         (swap! (:events system)
                (fn [events]

@@ -108,9 +108,11 @@
                                             :status (project-status system "Source World")))))
         (report-error! state result)))))
 
-(defn select-namespace! [state ns-sym]
-  (when (and (not= ns-sym (:namespace @state)) (allow-navigation! state))
-    (swap! state #(select-first (assoc % :namespace ns-sym)))))
+(defn select-namespace!
+  ([state ns-sym] (select-namespace! state ns-sym {}))
+  ([state ns-sym {:keys [reveal?]}]
+   (when (and (or reveal? (not= ns-sym (:namespace @state))) (allow-navigation! state))
+     (swap! state #(select-first (assoc % :namespace ns-sym))))))
 
 (defn select-category! [state category]
   (when (and (not= category (:category @state)) (allow-navigation! state))

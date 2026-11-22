@@ -66,6 +66,69 @@
   (press! ui KeyType/Tab)
   (navigate! ui KeyType/ArrowDown #(= 'total (get-in @state [:definition :name]))))
 
+(deftest project-search-opens-namespaces-and-definitions
+  (let [shortcut \f]
+    (with-terminal nil
+      (fn [ui]
+        (press! ui shortcut)
+        (is (str/includes? (frame ui) "Open a project to search"))
+        (press! ui KeyType/Escape)
+        (is (str/includes? (frame ui) "CLOJURE SYSTEM BROWSER"))))
+    (fixture/with-example
+     (fn [root]
+       (with-terminal root
+         (fn [{:keys [state] :as ui}]
+           (is (str/includes? (frame ui) "f: search"))
+           (press! ui shortcut)
+           (is (str/includes? (frame ui) "Project search"))
+           (press! ui \f)
+           (is (press! ui \q) "Typing in the search box does not quit")
+           (is (str/includes? (frame ui) "fq") "The shortcut can be typed in the query")
+           (is (str/includes? (frame ui) "No matches"))
+           (press! ui KeyType/Enter)
+           (is (str/includes? (frame ui) "Project search"))
+           (press! ui KeyType/Backspace)
+           (press! ui KeyType/Backspace)
+           (doseq [ch "ORDERS"] (press! ui ch))
+           (let [screen (frame ui)]
+             (is (when-let [namespaces (str/index-of screen "Namespaces")]
+                   (< namespaces (or (str/index-of screen "Functions") -1))))
+             (is (str/includes? screen (str "shop.orders/total · " (java.io.File. "src/shop/orders.clj") ":")))
+             (is (str/includes? screen "Private functions")))
+           (press! ui KeyType/ArrowDown)
+           (press! ui KeyType/Enter)
+           (is (= 'shop.orders-test (:namespace @state)))
+           (is (str/includes? (frame ui) "(deftest total-test"))
+           (press! ui shortcut)
+           (doseq [ch "shop.orders/totalx"] (press! ui ch))
+           (press! ui KeyType/ArrowLeft)
+           (press! ui KeyType/Delete)
+           (press! ui KeyType/Enter)
+           (is (= 'shop.orders (:namespace @state)))
+           (is (= 'total (get-in @state [:definition :name])))
+           (is (str/includes? (frame ui) "(defn total"))))))))
+
+(deftest project-search-preserves-pending-drafts
+  (fixture/with-example
+   (fn [root]
+     (with-terminal root
+       (fn [{:keys [state] :as ui}]
+         (total! ui)
+         (session/edit! state fixture/total-draft)
+         (press! ui \f)
+         (doseq [ch "orders"] (press! ui ch))
+         (press! ui KeyType/Enter)
+         (is (str/includes? (frame ui) "Unsaved changes: Save or Discard"))
+         (is (str/includes? (frame ui) "Project search"))
+         (press! ui KeyType/ArrowDown)
+         (press! ui KeyType/ArrowDown)
+         (press! ui KeyType/Enter)
+         (is (str/includes? (frame ui) "Project search"))
+         (is (= fixture/total-draft (:draft @state)))
+         (press! ui KeyType/Escape)
+         (is (= 'total (get-in @state [:definition :name])))
+         (is (str/includes? (frame ui) "(+ 10")))))))
+
 (deftest repl-panel-keeps-port-input-separate-from-source-shortcuts
   (fixture/with-example
    (fn [root]

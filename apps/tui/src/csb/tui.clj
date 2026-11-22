@@ -243,6 +243,44 @@
                #(min (max 0 (- total page)) (max 0 (+ (or % 0) delta)))))
       (= \p (.getCharacter key)) (show-repl! state))))
 
+(defn- open-search-result! [state result]
+  (let [namespace? (= :namespace (:result/type result))
+        opened? (if namespace?
+                  (session/select-namespace! state (:namespace result) {:reveal? true})
+                  (session/select-definition! state (:id result) {:reveal? true}))]
+    (when opened?
+      (swap! state #(-> %
+                        (dissoc :search :editor-error)
+                        (assoc :focus (if namespace? 0 2) :scroll 0 :help? false
+                               :diagnostics? false :source-order? false))))))
+
+(defn- search-key! [state ^KeyStroke key]
+  (let [{:keys [system search]} @state
+        {:keys [query caret results selection]} search
+        type (.getKeyType key)]
+    (cond
+      (= type KeyType/Escape) (swap! state dissoc :search)
+      (= type KeyType/Enter) (when-let [result (get results selection)]
+                              (open-search-result! state result))
+      (#{KeyType/ArrowUp KeyType/ArrowDown} type)
+      (when (seq results)
+        (let [delta (if (= type KeyType/ArrowUp) -1 1)]
+          (swap! state assoc-in [:search :selection]
+                 (max 0 (min (dec (count results)) (+ selection delta))))))
+
+      (not (or (.isCtrlDown key) (.isAltDown key)))
+      (let [widget (TextBox. ^String query TextBox$Style/SINGLE_LINE)]
+        (.setCaretPosition widget 0 (int caret))
+        (.handleKeyStroke widget key)
+        (let [text (.getText widget)
+              column (.getColumn (.getCaretPosition widget))]
+          (if (= text query)
+            (swap! state assoc-in [:search :caret] column)
+            (let [{:keys [namespaces definitions]} (when system (:value (service/search system text)))
+                  rows (into (mapv #(hash-map :result/type :namespace :namespace %) namespaces)
+                             definitions)]
+              (swap! state assoc :search {:query text :caret column :results rows :selection 0}))))))))
+
 (defn- step! [^TerminalScreen screen state last-frame]
   (render-if-changed! screen @state last-frame)
   (let [^KeyStroke key (.pollInput screen)
@@ -254,8 +292,9 @@
         repl-open? (:repl-open? @state)
         tests-open? (get-in @state [:tests-view :open?])
         java-vm-open? (:java-vm-editor @state)
+        search-open? (:search @state)
         eof? (= type KeyType/EOF)
-        quit? (and (not (or repl-open? tests-open? java-vm-open?)) (= ch \q))]
+        quit? (and (not (or repl-open? tests-open? java-vm-open? search-open?)) (= ch \q))]
     (when (and eof? (:dirty? @state)) (retain-draft! state))
     (if (or eof? (and quit? (not (:dirty? @state))))
       false
@@ -264,6 +303,9 @@
           java-vm-open? (when key (java-vm-key! state key))
           repl-open? (when key (repl-key! state key size))
           tests-open? (when key (tests-key! state key size))
+          search-open? (when key (search-key! state key))
+          (and (= ch \f) (not (.isCtrlDown key)) (not (.isAltDown key)))
+          (swap! state assoc :search {:query "" :caret 0 :results [] :selection 0})
           quit? (swap! state assoc :status "Unsaved changes: s to Save or d to Discard, then q")
           (= type KeyType/F3) (when (:system @state) (swap! state assoc-in [:tests-view :open?] true))
           (= ch \j) (session/show-java-vms! state)
