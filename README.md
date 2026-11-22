@@ -384,7 +384,7 @@ A subsequent reindexing failure is reported separately as `:reindex-error`.
 
 ## Releases
 
-Every `v*` tag (for example `v0.2.0`) runs a build-only GitHub Actions
+Every `v*` tag (for example `v0.3.0`) runs a build-only GitHub Actions
 workflow ([ADR 012](docs/decisions/012-release-packaging.md)) that publishes
 two assets to [GitHub Releases](https://github.com/DevGiuDev/clojure-system-browser/releases):
 the TUI/CLI uberjar and the `csb` launcher script. The workflow runs no
@@ -393,7 +393,7 @@ tests and makes no verification claims; checks stay local as recorded in
 
 ```sh
 clojure -T:build uber
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 The jar runs the TUI (`csb.tui` is the main class) on Java 21 or later and
@@ -403,8 +403,8 @@ release, put both assets in a directory on `PATH`:
 
 ```sh
 mkdir -p ~/.local/opt/csb && cd ~/.local/opt/csb
-curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.2.0/csb
-curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.2.0/clojure-system-browser-0.2.0.jar
+curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.3.0/csb
+curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.3.0/clojure-system-browser-0.3.0.jar
 chmod +x csb
 export PATH="$HOME/.local/opt/csb:$PATH"
 csb --project /path/to/project

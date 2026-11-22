@@ -43,9 +43,9 @@ executing anything. `examples/poly-sample-project` is a minimal browsable
 workspace with that layout, and save keeps its guarantees.
 
 Versioning was added ([ADR 011](decisions/011-versioning-changelog.md)): the
-version (0.2.0) lives in `csb.cli/version`, is shown by the CLI, Desktop and
+version (0.3.0) lives in `csb.cli/version`, is shown by the CLI, Desktop and
 TUI `--help` output and the Desktop title, and is kept in sync manually with
-the new `CHANGELOG.md`, which records 0.1.0 and 0.2.0.
+the `CHANGELOG.md`, which records 0.1.0 through 0.3.0.
 
 Release packaging was added
 ([ADR 012](decisions/012-release-packaging.md)): `build.clj` produces the

@@ -13,7 +13,7 @@
            [javafx.scene.control Button ComboBox ContextMenu Label ListCell ListView MenuItem TextArea TextField]
            [javafx.scene.input ContextMenuEvent KeyCode KeyEvent]
            [javafx.scene.paint Color]
-           [javafx.scene.shape Circle]
+           [javafx.scene.shape SVGPath]
            [javafx.scene.text Text]
            [javafx.stage Stage Window WindowEvent]
            [org.fxmisc.richtext CodeArea]))
@@ -78,7 +78,7 @@
 (defn- select! [ui selector text]
   (let [stage (sync! ui)]
     (fx! #(let [^ListView list-view (node stage selector)
-                index (first (keep-indexed (fn [i item] (when (str/starts-with? item text) i))
+                index (first (keep-indexed (fn [i item] (when (str/starts-with? (if (map? item) (:text item) item) text) i))
                                            (.getItems list-view)))]
             (when-not index (throw (ex-info "Missing list item" {:selector selector :text text})))
             (.select (.getSelectionModel list-view) (int index)))))
@@ -198,20 +198,22 @@
                                 (.layout root)
                                 (some (fn [^ListCell cell]
                                         (when (= label (.getText cell))
-                                          (some-> ^Circle (.getGraphic cell) .getFill)))
+                                          (when-let [graphic (.getGraphic cell)]
+                                            [(some-> ^SVGPath (.lookup graphic ".icon-stroke") .getStroke)
+                                             (.getAccessibleText cell)])))
                                       (.lookupAll list ".list-cell")))))))]
-           (is (= (Color/web "#77808a") (led "#test-definitions" "passing-test")))
+           (is (= [(Color/web "#51645f") "passing-test · Not run"] (led "#test-definitions" "passing-test")))
            (fire! ui "Run suite")
-           (is (= (Color/web "#e48419") (led "#test-namespaces" "shop.orders-test")))
-           (is (= (Color/web "#e48419") (led "#test-definitions" "passing-test")))
+           (is (= [(Color/web "#754500") "shop.orders-test · Running"] (led "#test-namespaces" "shop.orders-test")))
+           (is (= [(Color/web "#754500") "passing-test · Running"] (led "#test-definitions" "passing-test")))
            (fixture/await-state! state #(= :failed (get-in % [:test-runner :last-run :status])))
            (let [home (or (System/getenv "CSB_TEST_JAVA_HOME") (System/getProperty "java.home"))
                  output (get-in @state [:test-runner :last-run :output])]
              (is (some #{(str "Project JAVA_HOME " home)} output))
              (is (some #{(str "Project Java runtime " home)} output)))
-           (is (= (Color/web "#218441") (led "#test-definitions" "passing-test")))
-           (is (= (Color/web "#c33737") (led "#test-definitions" "failing-test")))
-           (is (= (Color/web "#c33737") (led "#test-namespaces" "shop.orders-test")))
+           (is (= [(Color/web "#236541") "passing-test · Passed"] (led "#test-definitions" "passing-test")))
+           (is (= [(Color/web "#9e2d35") "failing-test · Failed"] (led "#test-definitions" "failing-test")))
+           (is (= [(Color/web "#9e2d35") "shop.orders-test · Failed"] (led "#test-namespaces" "shop.orders-test")))
            (let [stage (sync! ui)
                  output (fx! #(.getText ^TextArea (node stage "#test-details")))]
              (is (str/includes? output "Configured suite command"))
@@ -225,7 +227,7 @@
            (fire! ui "Open test source")
            (is (= 'shop.orders-test (:namespace @state)))
            (is (str/includes? (source ui) "deftest passing-test"))
-           (is (= (Color/web "#c33737") (led "#namespaces" "shop.orders-test")))))))))
+           (is (= [(Color/web "#9e2d35") "shop.orders-test · Failed"] (led "#namespaces" "shop.orders-test")))))))))
 
 (deftest repl-panel-preserves-the-source-draft-and-validates-the-port
   (fixture/with-example
@@ -316,6 +318,8 @@
          (let [stage (sync! ui)]
            (is (fx! #(.isShowing ^Stage stage)))
            (is (= "" (source ui)))
+           (is (fx! #(let [^Button open (node stage ".button-primary")]
+                       (and open (= "Open project…" (.getText open)) (some? (.getGraphic open))))))
            (is (fx! #(.isDisabled ^Button
                                   (some (fn [^Button b] (when (= "Save" (.getText b)) b))
                                         (.lookupAll (.getRoot (.getScene ^Stage stage)) ".button"))))))
@@ -346,6 +350,8 @@
            (edit! ui replacement)
            (is (:dirty? @(:state ui)))
            (let [stage (sync! ui)]
+             (is (fx! #(let [^Button save (node stage ".button-primary")]
+                         (and save (= "Save" (.getText save)) (not (.isDisabled save))))))
              (is (fx! #(every? (fn [selector] (.isDisabled ^ListView (node stage selector)))
                                ["#namespaces" "#categories" "#definitions"]))))
            (fire! ui "Save")
@@ -353,6 +359,7 @@
            (is (= "Saved" (status ui)))
            (is (false? (:dirty? @(:state ui))))
            (let [stage (sync! ui)]
+             (is (fx! #(some? (node stage "#status.tone-success"))))
              (is (fx! #(not (.isDisabled ^ListView (node stage "#definitions")))))))
          (fire! ui "Reload")
          (total! ui)
@@ -374,6 +381,9 @@
              (edit! ui "(defn total [")
              (fire! ui "Save")
              (is (str/includes? (status ui) "parse:"))
+             (let [stage (sync! ui)]
+               (is (fx! #(and (node stage "#status.tone-error")
+                              (node stage "#draft-status.tone-warning")))))
              (is (= "(defn total [" (source ui)))
              (is (:dirty? @state))
              (is (fixture/bytes= original file)))
@@ -395,6 +405,9 @@
                (fixture/write! file external)
                (fire! ui "Save")
                (is (str/includes? (status ui) "conflict:"))
+               (let [stage (sync! ui)]
+                 (is (fx! #(and (node stage "#status.tone-warning")
+                                (node stage "#draft-status.tone-warning")))))
                (is (= fixture/total-draft (source ui)))
                (is (:dirty? @state))
                (is (fixture/bytes= external file))
@@ -488,7 +501,7 @@
            (is (= #{"syntax-number"} (style-at "42")))
            (is (= #{"syntax-string"} (style-at "hello")))
            (is (= #{"syntax-literal"} (style-at "true")))
-           (is (= (Color/web "#0550ae")
+           (is (= (Color/web "#244f9e")
                   (fx! #(do (.applyCss area)
                             (.layout area)
                             (.getFill ^Text (.lookup area ".syntax-keyword"))))))

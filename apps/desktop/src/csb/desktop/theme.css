@@ -1,0 +1,122 @@
+.root {
+    -csb-surface: #f2f6f4;
+    -csb-paper: #ffffff;
+    -csb-divider: #d2dfda;
+    -csb-control-edge: #73877f;
+    -csb-ink: #182522;
+    -csb-muted: #51645f;
+    -csb-accent: #126456;
+    -csb-accent-hover: #0d5548;
+    -csb-selection: #d9f0e9;
+    -csb-focus: #147769;
+    -csb-warning: #754500;
+    -csb-warning-surface: #fff2d3;
+    -csb-error: #9e2d35;
+    -csb-error-surface: #fde9ea;
+    -csb-success: #236541;
+    -csb-success-surface: #e5f4e9;
+    -fx-font-family: system;
+    -fx-font-size: 13px;
+    -fx-base: -csb-surface;
+    -fx-background: -csb-surface;
+    -fx-control-inner-background: -csb-paper;
+    -fx-text-background-color: -csb-ink;
+    -fx-focus-color: -csb-focus;
+    -fx-faint-focus-color: -csb-selection;
+    -fx-accent: -csb-accent;
+    -fx-selection-bar: -csb-selection;
+    -fx-selection-bar-non-focused: -csb-selection;
+    -fx-selection-bar-text: -csb-ink;
+}
+
+.desktop, .desktop .split-pane { -fx-background-color: -csb-surface; }
+.desktop .split-pane { -fx-padding: 0; }
+.desktop .split-pane-divider { -fx-background-color: -csb-divider; -fx-padding: 2px; }
+.desktop-header, .workspace-panel, .status-bar { -fx-padding: 12px 14px; }
+.desktop-header { -fx-background-color: -csb-paper; -fx-border-color: transparent transparent -csb-divider; }
+.status-bar { -fx-border-color: -csb-divider transparent transparent; }
+.editor-panel { -fx-background-color: -csb-paper; }
+.symbol-panel { -fx-border-color: transparent transparent transparent -csb-divider; }
+.java-vm-panel { -fx-background-color: -csb-surface; -fx-background-radius: 6px; -fx-padding: 8px; }
+
+.app-title { -fx-font-size: 17px; -fx-font-weight: bold; -fx-text-fill: -csb-ink; -fx-graphic-text-gap: 8px; }
+.panel-heading { -fx-font-weight: bold; -fx-text-fill: -csb-ink; -fx-graphic-text-gap: 7px; }
+.secondary-text { -fx-text-fill: -csb-muted; }
+.monospace { -fx-font-family: monospace; }
+
+.desktop .button {
+    -fx-background-color: -csb-paper;
+    -fx-background-insets: 0;
+    -fx-background-radius: 5px;
+    -fx-border-color: -csb-control-edge;
+    -fx-border-radius: 5px;
+    -fx-padding: 5px 8px;
+    -fx-text-fill: -csb-ink;
+    -fx-graphic-text-gap: 6px;
+}
+.desktop .button:hover, .desktop .button-active {
+    -fx-background-color: -csb-selection;
+    -fx-border-color: -csb-accent;
+}
+.desktop .button:pressed { -fx-background-color: derive(-csb-selection, -12%); }
+.desktop .button-primary {
+    -fx-background-color: -csb-accent;
+    -fx-border-color: -csb-accent;
+    -fx-text-fill: -csb-paper;
+}
+.desktop .button-primary:hover, .desktop .button-primary:pressed { -fx-background-color: -csb-accent-hover; }
+.desktop .button-active { -fx-text-fill: -csb-accent; }
+.desktop .button:focused {
+    -fx-border-color: -csb-focus, -csb-paper;
+    -fx-border-insets: -2px, 0;
+    -fx-border-radius: 7px, 5px;
+}
+.desktop .button:disabled { -fx-opacity: 0.68; }
+.desktop .toolbar .button { -fx-padding: 5px 6px; }
+
+.desktop .text-field, .desktop .combo-box-base, .desktop .text-area, .desktop .list-view {
+    -fx-background-color: -csb-paper;
+    -fx-background-insets: 0;
+    -fx-background-radius: 5px;
+    -fx-border-color: -csb-control-edge;
+    -fx-border-radius: 5px;
+}
+.desktop .text-input { -fx-text-fill: -csb-ink; -fx-highlight-fill: -csb-selection; -fx-highlight-text-fill: -csb-ink; }
+.desktop .text-field:focused, .desktop .combo-box-base:focused, .desktop .text-area:focused,
+.desktop .list-view:focused {
+    -fx-border-color: -csb-focus, -csb-focus;
+    -fx-border-insets: -1px, 0;
+    -fx-border-radius: 6px, 5px;
+}
+.desktop .text-field { -fx-prompt-text-fill: -csb-muted; }
+#definition-filter { -fx-padding: 5px 8px 5px 30px; }
+.filter-icon { -fx-translate-x: 8px; }
+
+.desktop .list-cell { -fx-padding: 5px 8px; -fx-text-fill: -csb-ink; -fx-graphic-text-gap: 7px; }
+.desktop .list-cell:filled:hover { -fx-background-color: -csb-surface; }
+.desktop .list-cell:filled:selected, .desktop .list-cell:filled:selected:hover {
+    -fx-background-color: -csb-selection;
+    -fx-text-fill: -csb-ink;
+    -fx-border-color: transparent transparent transparent -csb-accent;
+    -fx-border-width: 0 0 0 3px;
+    -fx-padding: 5px 8px 5px 5px;
+}
+.desktop .list-view:disabled { -fx-opacity: 0.78; }
+
+.icon-stroke {
+    -fx-fill: transparent;
+    -fx-stroke: -csb-muted;
+    -fx-stroke-width: 1.5px;
+    -fx-stroke-line-cap: round;
+    -fx-stroke-line-join: round;
+}
+.app-title .icon-stroke, .panel-heading .icon-stroke, .button-active .icon-stroke { -fx-stroke: -csb-accent; }
+.button-primary .icon-stroke { -fx-stroke: -csb-paper; }
+.status-message { -fx-padding: 3px 6px; -fx-background-radius: 4px; -fx-graphic-text-gap: 6px; }
+.status-message.tone-neutral { -fx-text-fill: -csb-muted; }
+.status-message.tone-warning { -fx-background-color: -csb-warning-surface; -fx-text-fill: -csb-warning; }
+.status-message.tone-error { -fx-background-color: -csb-error-surface; -fx-text-fill: -csb-error; }
+.status-message.tone-success { -fx-background-color: -csb-success-surface; -fx-text-fill: -csb-success; }
+.tone-warning .icon-stroke { -fx-stroke: -csb-warning; }
+.tone-error .icon-stroke { -fx-stroke: -csb-error; }
+.tone-success .icon-stroke { -fx-stroke: -csb-success; }

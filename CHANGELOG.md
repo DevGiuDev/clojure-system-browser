@@ -6,7 +6,9 @@ version lives in `csb.cli/version` and is kept in sync with this file
 manually ([ADR 011](docs/decisions/011-versioning-changelog.md)). While the
 project is 0.x, minor bumps carry features and the MVP stays free to evolve.
 
-## [Unreleased]
+## [0.3.0] - 2026-11-22
+
+### Added
 
 - Local nREPL panel in Desktop and TUI with a multiline console, explicit
   definition evaluation, streamed output and interruption (ADR 013).
@@ -18,6 +20,17 @@ project is 0.x, minor bumps carry features and the MVP stays free to evolve.
 - Java VMs in Desktop and TUI selects a local JDK per project for test
   processes, with a list of detected installations and manual path entry
   (ADR 017).
+- Desktop visual theme (ADR 018): a light palette with green-tinted surfaces
+  and a teal accent centralized in `theme.css`, one 16 px vector icon family
+  for actions, views, list headers, definition kinds and operation states,
+  a filter icon and primary emphasis for `Open project…` and `Save`.
+
+### Changed
+
+- Operation severity travels as data: `csb.session` attaches a
+  `:status-tone` to status messages, so conflicts render amber, other
+  failures red and confirmed saves green, with draft and error shown
+  simultaneously; the editor stylesheet shares the theme palette variables.
 
 ## [0.2.0] - 2026-11-21
 

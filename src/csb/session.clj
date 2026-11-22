@@ -44,8 +44,10 @@
                        (str ";; " file "\n" (str/join "\n" declarations)))
                      entries)))))
 
-(defn- message [result]
-  (str (name (get-in result [:error :type] :error)) ": " (get-in result [:error :message])))
+(defn- report-error! [state result]
+  (let [{:keys [type message] :or {type :error}} (:error result)]
+    (swap! state assoc :status (str (name type) ": " message)
+           :status-tone (if (= type :conflict) :warning :error))))
 
 (defn show-java-vms! [state]
   (when-let [root (some-> (:system @state) service/project-info :root)]
@@ -69,13 +71,13 @@
         (if (= :ok (:status result))
           (swap! state #(-> %
                             (dissoc :java-vm-editor)
-                            (assoc :status (str "Java VM saved · "
+                            (assoc :status-tone :success :status (str "Java VM saved · "
                                                 (or (:value result) "Inherit launcher environment")))))
           (swap! state assoc-in [:java-vm-editor :error] (get-in result [:error :message])))))))
 
 (defn- allow-navigation! [state]
   (if (:dirty? @state)
-    (do (swap! state assoc :status "Unsaved changes: Save or Discard before navigating") false)
+    (do (swap! state assoc :status "Unsaved changes: Save or Discard before navigating" :status-tone :warning) false)
     true))
 
 (defn- select-first [state]
@@ -102,8 +104,9 @@
                                             :system system :namespace ns-sym
                                             :filter "" :focus 0 :scroll 0
                                             :help? false :diagnostics? false :source-order? false
+                                            :status-tone nil
                                             :status (project-status system "Source World")))))
-        (swap! state assoc :status (message result))))))
+        (report-error! state result)))))
 
 (defn select-namespace! [state ns-sym]
   (when (and (not= ns-sym (:namespace @state)) (allow-navigation! state))
@@ -127,14 +130,15 @@
          (let [d (:value result)]
            (swap! state #(cond-> (assoc % :definition d :draft (:source d) :dirty? false)
                            reveal? (assoc :namespace (:namespace d) :category nil :filter "" :source-order? false))))
-         (do (swap! state assoc :status (message result)) nil))))))
+         (do (report-error! state result) nil))))))
 
 (defn edit! [state text]
   (when (get-in @state [:definition :writable?])
     (swap! state assoc :draft text :dirty? (not= text (get-in @state [:definition :source])))))
 
 (defn discard! [state]
-  (swap! state assoc :draft (or (get-in @state [:definition :source]) "") :dirty? false :status "Draft discarded"))
+  (swap! state assoc :draft (or (get-in @state [:definition :source]) "")
+         :dirty? false :status "Draft discarded" :status-tone nil))
 
 (defn save! [state]
   (let [{:keys [system definition draft]} @state]
@@ -145,10 +149,10 @@
           (let [saved (:value result)]
             (if (:reindex-error saved)
               (swap! state assoc :definition (assoc definition :source draft :revision (:revision saved))
-                     :dirty? false :status "Saved; index refresh failed. Reload the project.")
+                     :dirty? false :status "Saved; index refresh failed. Reload the project." :status-tone :warning)
               (swap! state assoc :definition (:definition saved) :draft (get-in saved [:definition :source])
-                     :dirty? false :status "Saved")))
-          (swap! state assoc :status (message result)))))))
+                     :dirty? false :status "Saved" :status-tone :success)))
+          (report-error! state result))))))
 
 (defn reload! [state]
   (when (and (:system @state) (allow-navigation! state))
@@ -158,10 +162,13 @@
                        (let [available (namespaces s)
                              ns-sym (if (some #{(:namespace s)} available) (:namespace s) (first available))]
                          (select-first (assoc s :namespace ns-sym
+                                              :status-tone nil
                                               :status (project-status (:system s) "Reloaded"))))))
-        (swap! state assoc :status (message result))))))
+        (report-error! state result)))))
 
 (defn extension! [state kind id]
   (when-let [system (:system @state)]
     (let [r (service/invoke-extension system kind id {})]
-      (swap! state assoc :status (if (= :ok (:status r)) (pr-str (:value r)) (message r))))))
+      (if (= :ok (:status r))
+        (swap! state assoc :status (pr-str (:value r)) :status-tone nil)
+        (report-error! state r)))))

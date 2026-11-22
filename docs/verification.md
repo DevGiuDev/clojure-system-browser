@@ -8,10 +8,10 @@ were executed from prepared verifications.
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
 | Core, including test path and Java VM discovery | 53 | 391 | No failures or errors; JDK 27 |
-| Desktop with headless JavaFX controls | 15 | 137 | No failures or errors; JDK 27 |
+| Desktop with headless JavaFX controls | 15 | 142 | No failures or errors; JDK 27 |
 | TUI with virtual terminal | 20 | 245 | No failures or errors; JDK 27 |
 | nREPL and test process integration | 9 | 51 | No failures or errors; JDK 27 |
-| Suite total | **97** | **824** | No failures or errors |
+| Suite total | **97** | **829** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | **40 checks**, no failures |
 | clj-kondo | — | — | 0 errors, 0 warnings |
 
@@ -64,6 +64,34 @@ clean.
 order view, read-only) with automated verification in all three suites.
 Forward-reference diagnostics, load validation and write operations with
 placement remain unimplemented.
+
+## Desktop visual theme and icons (2026-11-22)
+
+The Desktop visual plan (`prompts/002-estilo-desktop.md`) is implemented
+([ADR 018](decisions/018-desktop-visual-theme.md)). `theme.css` centralizes
+the light green-tinted palette as named `-csb-*` variables loaded from the
+scene, `code-editor.css` reuses them keeping the lexical classes, one 16 px
+SVGPath icon family covers actions, views, list headers, definition kinds,
+read-only locks and operation states, and the filter field carries a search
+icon. Severity travels as data: `csb.session` attaches `:status-tone` when
+it builds a status message from the result's error type, so conflicts render
+amber, other failures red, confirmed saves green, and draft and error
+markers appear simultaneously; a save whose reindexing failed stays amber,
+distinct from a write failure.
+
+All four suites were re-run on the final code with JDK 27 (`JAVA_CMD`):
+core 53/391, Desktop 15/142, TUI 20/245, live-test 9/51, and clj-kondo
+reported 0 errors, 0 warnings. The Desktop suite asserts the primary
+emphasis of `Open project…` and `Save`, the success tone after a confirmed
+save, and the simultaneous draft and error or conflict tones. The WCAG
+contrast ratios of the fifteen foreground/background pairs of the palette
+were computed from the CSS values: normal text reaches at least 5.77:1
+(secondary text on the window surface) and essential indicators at least
+3.82:1 (control edges), so the 4.5:1 and 3:1 thresholds pass; this is a
+calculation from the palette values, not a rendered measurement. The owner
+visually confirmed the themed window on Linux. The manual acceptance matrix
+(760 px and scaled sessions, macOS, Windows) remains pending as recorded in
+[acceptance](acceptance.md).
 
 ## Project Test Runner (2026-11-22)
 
