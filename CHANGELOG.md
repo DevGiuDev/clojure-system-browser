@@ -74,6 +74,10 @@ project is 0.x, minor bumps carry features and the MVP stays free to evolve.
 - The Tests log has more space and highlights failures in red. Opening a
   failed test shows its first failure above the source and marks the reported
   line when it matches the indexed definition.
+- The observer that runs inside the project's JVM (child process and
+  Leiningen injection) loads on Clojure 1.8 or later: it no longer references
+  `ex-message` or `requiring-resolve`, both added in Clojure 1.10, and a
+  regression test keeps the worker free of newer core symbols.
 
 ## [0.3.1] - 2026-11-22
 

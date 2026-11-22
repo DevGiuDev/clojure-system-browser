@@ -14,7 +14,10 @@ Leiningen loads the observer through a temporary injection and keeps the
 project's test profile and selectors.
 
 An observer installed in the child JVM captures test lifecycle events
-alongside the project's own report. The parent validates events and matches
+alongside the project's own report. The observer source loads on the
+project's own Clojure, so it stays within core functions available since
+Clojure 1.8 and avoids newer core such as `ex-message` and
+`requiring-resolve`. The parent validates events and matches
 them to names in the source index. Grey marks cases without an observed
 outcome. A namespace turns green once every indexed case reports a pass.
 An aborted namespace or a failed case turns its row red.

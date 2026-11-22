@@ -353,6 +353,21 @@ Headless passed 17 tests and 170 assertions, and the virtual-terminal TUI
 passed 20 tests and 249 assertions.
 clj-kondo reported zero errors and warnings.
 
+### Observer Clojure 1.8 compatibility (2026-11-22)
+
+An external report noted that the child observer referenced `ex-message`,
+added in Clojure 1.10. The audit of the worker source also found
+`requiring-resolve` (1.10) in the Lazytest, Kaocha and exec paths, so both
+were replaced with `(.getMessage ^Throwable …)` and a `require` + `resolve`
+helper. Under a real Clojure 1.8.0 JVM on JDK 27, the pre-fix worker failed
+to load with `Unable to resolve symbol: ex-message` and the fixed one loads
+and resolves `csb.test-worker/exec`. The new regression test
+(`csb.test-worker-compat-test`) asserts the worker references no core var
+newer than Clojure 1.8. Core suite passed 69 tests and 540 assertions;
+clj-kondo reported zero errors and warnings for the project targets and the
+extension. Running the observer inside a real old-Clojure project from the
+clients remains pending.
+
 ## Example nREPL launchers (2026-11-22)
 
 Started both example launchers concurrently from disposable project copies

@@ -31,10 +31,17 @@
       (clip-text (pr-str value)))
     (catch Throwable _ nil)))
 
+;; clojure.core/requiring-resolve and ex-message are 1.10+. The worker loads
+;; inside the project's JVM, which may pin an older Clojure (minimum 1.8).
+(defn- resolve-requiring [sym]
+  (let [ns (symbol (namespace sym))]
+    (require ns)
+    (resolve sym)))
+
 (defn- failure-details [{:keys [file line doc message expected actual thrown] :as event}]
   (let [unexpected? (instance? Throwable actual)
         exception (if unexpected? actual thrown)
-        cause (when exception (or (short-text (ex-message exception))
+        cause (when exception (or (short-text (.getMessage ^Throwable exception))
                                   (-> exception class .getSimpleName)))
         case-name (short-text doc)
         message (if unexpected? cause (or (short-text message) cause))]
@@ -55,10 +62,10 @@
                   nil)]
     (case type
       (:begin-test-var :begin-test-ns) (publish! id :running)
-      (let [{:keys [total fail]} ((requiring-resolve 'lazytest.results/summarize) results)
+      (let [{:keys [total fail]} ((resolve-requiring 'lazytest.results/summarize) results)
             failure (when (and (= :end-test-var type) (pos? fail))
                       (some #(when (= :fail (:type %)) %)
-                            ((requiring-resolve 'lazytest.results/result-seq) results)))]
+                            ((resolve-requiring 'lazytest.results/result-seq) results)))]
         (publish! id (cond (pos? fail) :failed (pos? total) :passed :else :unavailable)
                   (some-> failure failure-details))))))
 
@@ -119,7 +126,7 @@
 
 (defn- observe-kaocha! []
   (alter-var-root
-   (requiring-resolve 'kaocha.api/run)
+   (resolve-requiring 'kaocha.api/run)
    (fn [run]
      (fn [config]
        (run (update config :kaocha/reporter
@@ -137,7 +144,7 @@
       nil)))
 
 (defn exec [options]
-  (let [f (requiring-resolve (symbol (System/getenv "CSB_TEST_EXEC_FN")))
+  (let [f (resolve-requiring (symbol (System/getenv "CSB_TEST_EXEC_FN")))
         result (f options)]
     (when (and (map? result) (some #(and (number? %) (pos? %)) [(:fail result) (:error result)]))
       (System/exit 1))

@@ -465,6 +465,11 @@ failure above the source, including expected and actual values when the runner
 reports them. CSB highlights the reported line when it matches the indexed
 definition.
 
+The observer that collects those events runs inside the project's JVM, so its
+source stays within Clojure core available since Clojure 1.8; projects pinned
+to an older Clojure still load it and keep their own runner. Older Clojure
+versions are unsupported.
+
 For a project alias that launches `lazytest.main`, **Run test** selects an
 indexed top-level `defdescribe` suite and reports the aggregate result of its
 nested cases. **Run namespace** selects the namespace. CSB uses the project's
