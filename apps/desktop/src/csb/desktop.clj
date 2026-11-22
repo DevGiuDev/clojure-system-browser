@@ -18,8 +18,8 @@
             [csb.tests :as tests])
   (:import [javafx.application Platform]
            [javafx.beans.value ChangeListener]
-           [javafx.scene.control ListCell TextArea]
-           [javafx.scene.input KeyCode KeyEvent]
+           [javafx.scene.control ListCell TextArea TextField]
+           [javafx.scene.input KeyCode KeyEvent MouseEvent]
            [javafx.stage DirectoryChooser WindowEvent]
            [java.util.concurrent Executors ExecutorService]))
 
@@ -50,6 +50,13 @@
             :on-action (fn [_] (action))}
      icon (assoc :graphic (icons/graphic icon))
      active? (assoc :accessible-help "Active view"))))
+
+(defn- filter-box [id prompt text on-text-changed]
+  {:fx/type :stack-pane :style-class ["filter-box"] :alignment :center-left
+   :children [{:fx/type :text-field :id id :prompt-text prompt
+               :accessible-help prompt :pref-column-count 16
+               :text text :on-text-changed on-text-changed}
+              (update (icons/graphic :search) :style-class conj "filter-icon")]})
 
 (def ^:private test-appearance
   {:passed [:success :success] :failed [:error :error] :error [:error :error]
@@ -185,6 +192,95 @@
               :disable (boolean (or busy? dirty?))
               :items (mapv #(order-label % definition) entries)}}]}))
 
+(defn- search-items
+  "Interleave section headers and result rows for the search results list.
+   Namespaces come first, then definition categories in name order."
+  [{:keys [namespaces definitions]}]
+  (vec
+   (concat
+    (when (seq namespaces)
+      (into [{:header "Namespaces"}] (map #(array-map :result/type :namespace :namespace %)) namespaces))
+    (mapcat (fn [[category defs]] (into [{:header (str/capitalize (str/replace (name category) "-" " "))}] defs))
+            (group-by :category definitions)))))
+
+(defn- search-rows
+  "Result rows of a search, without section headers."
+  [results]
+  (filterv (complement :header) (search-items results)))
+
+(defn- search-item [item root]
+  (if (:header item)
+    {:text (:header item) :header? true}
+    (let [namespace? (= :namespace (:result/type item))]
+      (cond-> {:text (if namespace?
+                       (str (:namespace item))
+                       (str (:namespace item) "/" (:name item) " · "
+                            (str/replace-first (:file item) (str root java.io.File/separator) "")
+                            ":" (get-in item [:location :row])))}
+        namespace? (assoc :icon :layers)
+        (not namespace?) (assoc :icon (get definition-icons (:kind item) :definition)
+                                :accessible-text (str (name (or (:kind item) :definition)) " "
+                                                      (:namespace item) "/" (:name item)))))))
+
+(defn- search-cell [{:keys [text header? icon accessible-text]}]
+  (if header?
+    {:text text :style-class ["list-cell" "search-header"]}
+    (cond-> {:text text :graphic (icons/graphic icon)}
+      accessible-text (assoc :accessible-text accessible-text))))
+
+(defn- search-overlay
+  "Centered quick-open panel over the workspace: type to search, arrows move,
+   Enter opens the selection, Esc or a click on the scrim closes."
+  [{:keys [search system]} actions]
+  (let [items (search-items (:results search))
+        root (some-> system service/project-info :root)
+        rows (search-rows (:results search))]
+    {:fx/type :stack-pane :style-class ["search-scrim"]
+     :on-mouse-pressed (fn [_] ((:close-search actions)))
+     :children
+     [{:fx/type :v-box :style-class ["search-overlay" "desktop"] :spacing 8
+       :on-mouse-pressed (fn [^MouseEvent e] (.consume e))
+       :children
+       (into
+        [{:fx/type fx/ext-on-instance-lifecycle
+          :on-created (fn [^TextField field] (Platform/runLater #(.requestFocus field)))
+          :desc {:fx/type :text-field :id "search-query"
+                 :prompt-text "Search namespaces and definitions…"
+                 :accessible-help "Search namespaces and definitions"
+                 :text (or (:query search) "") :on-text-changed (:search-query actions)
+                 :on-key-pressed (fn [^KeyEvent e]
+                                   (cond
+                                     (= KeyCode/ENTER (.getCode e))
+                                     (do (.consume e) ((:open-search-result actions)))
+                                     (= KeyCode/UP (.getCode e))
+                                     (do (.consume e) ((:move-search-selection actions) -1))
+                                     (= KeyCode/DOWN (.getCode e))
+                                     (do (.consume e) ((:move-search-selection actions) 1))))}}]
+        (if (empty? rows)
+          [{:fx/type :label :id "search-empty" :wrap-text true
+            :style-class ["label" "secondary-text"]
+            :text (if-not system
+                    "Open a project to search."
+                    (if (str/blank? (:query search))
+                      "Type to search namespaces and definitions"
+                      "No matches in the indexed project."))}]
+          [(update (selectable-items "search-results" items (:selection search)
+                                     #(search-item % root)
+                                     (fn [item] ((:select-search-result actions) item))
+                                     false)
+                   :desc assoc
+                   :pref-height 320
+                   :cell-factory {:fx/cell-type accessible-cell
+                                  :describe search-cell}
+                   :on-key-pressed (fn [^KeyEvent e]
+                                     (when (= KeyCode/ENTER (.getCode e))
+                                       (.consume e)
+                                       ((:open-search-result actions)))))
+           {:fx/type :h-box :spacing 8 :alignment :center-left
+            :children [{:fx/type :label :style-class ["label" "secondary-text"]
+                        :text "Enter opens · ↑ ↓ navigates · Esc closes"}
+                       (button "Close" (:close-search actions) false)]}]))}]}))
+
 (defn- symbol-panel [{:keys [system symbol-results busy? dirty?]} actions]
   (let [{:keys [action symbol matches selection]} symbol-results
         root (:root (service/project-info system))
@@ -243,23 +339,23 @@
      :children
      (into
       [{:fx/type :h-box :spacing 8 :alignment :center-left
-       :children
-       [(heading "nREPL" :terminal)
-        {:fx/type :text-field :id "repl-host" :pref-column-count 9 :prompt-text "Host"
-         :disable (not disconnected?) :text (or host repl/default-host)
-         :on-text-changed (:repl-host actions)
-         :on-action (fn [_] ((:repl-connect actions)))}
-        {:fx/type :text-field :id "repl-port" :pref-column-count 5 :prompt-text "Port"
-         :disable (not disconnected?) :text (or port "") :on-text-changed (:repl-port actions)
-         :on-action (fn [_] ((:repl-connect actions)))}
-        (button "Connect" (:repl-connect actions) (or (not disconnected?) (:busy? state))
-                {:primary? (and disconnected? (not (:busy? state)))})
-        (button "Disconnect" (:repl-disconnect actions) (or disconnected? (= :disconnecting phase)))
-        (if inspector?
-          (button "Console" (:hide-inspection actions) false)
-          (button "Inspect runtime" (:show-inspection actions) pending?))
-        (status-label "repl-status" (str (when namespace (str namespace " · ")) (or status "Disconnected"))
-                      (when working? :warning) (when working? :clock))]}]
+        :children
+        [(heading "nREPL" :terminal)
+         {:fx/type :text-field :id "repl-host" :pref-column-count 9 :prompt-text "Host"
+          :disable (not disconnected?) :text (or host repl/default-host)
+          :on-text-changed (:repl-host actions)
+          :on-action (fn [_] ((:repl-connect actions)))}
+         {:fx/type :text-field :id "repl-port" :pref-column-count 5 :prompt-text "Port"
+          :disable (not disconnected?) :text (or port "") :on-text-changed (:repl-port actions)
+          :on-action (fn [_] ((:repl-connect actions)))}
+         (button "Connect" (:repl-connect actions) (or (not disconnected?) (:busy? state))
+                 {:primary? (and disconnected? (not (:busy? state)))})
+         (button "Disconnect" (:repl-disconnect actions) (or disconnected? (= :disconnecting phase)))
+         (if inspector?
+           (button "Console" (:hide-inspection actions) false)
+           (button "Inspect runtime" (:show-inspection actions) pending?))
+         (status-label "repl-status" (str (when namespace (str namespace " · ")) (or status "Disconnected"))
+                       (when working? :warning) (when working? :clock))]}]
       (if inspector?
         [(inspection-panel state actions)]
         [{:fx/type fx/ext-on-instance-lifecycle :on-created follow-transcript! :v-box/vgrow :always
@@ -319,12 +415,7 @@
                            {:icon :tests :active? (get-in state [:tests-view :open?])})
                    (button "Java VMs…" (:show-java-vms actions) (or busy? (nil? system) (:java-vm-editor state))
                            {:active? (:java-vm-editor state)})
-                   (button "REPL" (:toggle-repl actions) busy? {:icon :terminal :active? (:repl-open? state)})]}
-       {:fx/type :stack-pane :style-class ["filter-box"] :alignment :center-left
-        :children [{:fx/type :text-field :id "definition-filter" :prompt-text "Filter definitions…"
-                    :accessible-help "Filter definitions" :pref-column-count 16
-                    :text (get state :filter "") :on-text-changed (:filter actions)}
-                   (update (icons/graphic :search) :style-class conj "filter-icon")]}]
+                   (button "REPL" (:toggle-repl actions) busy? {:icon :terminal :active? (:repl-open? state)})]}]
       (map (fn [{:keys [title kind id]}]
              (button title #((:extension actions) kind id) busy?)))
       extensions)}))
@@ -350,8 +441,11 @@
         test-tree (tests/targets state)
         tests-open? (get-in state [:tests-view :open?])
         defs (filterv #(str/includes? (str/lower-case (str (:name %)))
-                                     (str/lower-case (get state :filter "")))
+                                      (str/lower-case (get state :filter "")))
                       (session/definitions state))
+        nss (filterv #(str/includes? (str/lower-case (str %))
+                                     (str/lower-case (get state :namespace-filter "")))
+                     (vec (session/namespaces state)))
         extensions (when system
                      (concat (map #(assoc % :kind :commands) (service/contributions system :commands))
                              (map #(assoc % :kind :views) (service/contributions system :views))))]
@@ -362,81 +456,96 @@
      {:fx/type :scene
       :stylesheets [(-> "csb/desktop/theme.css" io/resource .toExternalForm)]
       :on-key-pressed (fn [^KeyEvent e]
-                       (cond
-                         (and (.isShortcutDown e) (= KeyCode/S (.getCode e)))
-                         (do (.consume e) ((:save actions)))
-                         (and (:java-vm-editor state) (= KeyCode/ESCAPE (.getCode e)))
-                         (do (.consume e) ((:close-java-vms actions)))
-                         (and tests-open? (= KeyCode/ESCAPE (.getCode e)))
-                         (do (.consume e) ((:toggle-tests actions)))
-                         (and (:symbol-results state) (= KeyCode/ESCAPE (.getCode e)))
-                         (do (.consume e) ((:close-symbol-results actions)))
-                         (and (:source-order? state) (= KeyCode/ESCAPE (.getCode e)))
-                         (do (.consume e) ((:toggle-order actions)))))
+                        (cond
+                          (and (.isShortcutDown e) (= KeyCode/F (.getCode e)))
+                          (do (.consume e) ((:open-search actions)))
+                          (and (:search state) (= KeyCode/ESCAPE (.getCode e)))
+                          (do (.consume e) ((:close-search actions)))
+                          (and (.isShortcutDown e) (= KeyCode/S (.getCode e)))
+                          (do (.consume e) ((:save actions)))
+                          (and (:java-vm-editor state) (= KeyCode/ESCAPE (.getCode e)))
+                          (do (.consume e) ((:close-java-vms actions)))
+                          (and tests-open? (= KeyCode/ESCAPE (.getCode e)))
+                          (do (.consume e) ((:toggle-tests actions)))
+                          (and (:symbol-results state) (= KeyCode/ESCAPE (.getCode e)))
+                          (do (.consume e) ((:close-symbol-results actions)))
+                          (and (:source-order? state) (= KeyCode/ESCAPE (.getCode e)))
+                          (do (.consume e) ((:toggle-order actions)))))
       :root
-      {:fx/type :border-pane :style-class ["desktop"]
-       :top {:fx/type :v-box :spacing 8 :style-class ["desktop-header"]
-             :children
-             (cond-> [(assoc (heading "Clojure System Browser" :definition)
-                             :style-class ["label" "app-title"])
-                       (toolbar state actions extensions)]
-               (:java-vm-editor state) (conj (java-vm-panel (:java-vm-editor state) busy? actions)))}
-       :center
-       {:fx/type :split-pane :orientation :vertical
-        :divider-positions (if tests-open? [0.65] (if (:repl-open? state) [0.25 0.54] [0.34]))
-        :items
-        (if tests-open?
-          (cond-> [(tests-panel state actions test-tree)]
-            (:repl-open? state) (conj (repl-panel state actions)))
-        (cond->
-         [{:fx/type :h-box :spacing 12 :min-height 140 :style-class ["workspace-panel"]
-          :children
-          [(namespace-list "namespaces" "Namespaces" (vec (session/namespaces state)) (:namespace state)
-                           (:namespace actions) (or busy? dirty?) state test-tree)
-           (let [cats (session/categories state)]
-             (selection-list "categories"
-                             (str "Categories"
-                                  (when cats
-                                    (str " · " (:total cats) " defs · " (:files cats)
-                                         (if (= 1 (:files cats)) " file" " files"))))
-                             :categories
-                             (:entries cats) (:category state)
-                             session/category-label
-                             (fn [entry] ((:category actions) (:category entry)))
-                             (or busy? dirty?)))
-           (definition-list defs (some #(when (= (:id %) (:id definition)) %) defs)
-                            #((:definition actions) (:id %)) (or busy? dirty?)
-                            (symbol-menu/on-definitions defs (:lookup-symbol actions)))]}
-         (cond->
-          {:fx/type :border-pane
-          :center
-          (if (:source-order? state)
-            (order-panel state actions)
-            {:fx/type :v-box :spacing 6 :style-class ["workspace-panel" "editor-panel"]
-             :children
-             (cond-> [(assoc (heading (cond requires? (str "Requires · " (:namespace state))
-                                            definition (str (:namespace definition) "/" (:name definition))
-                                            :else "Select a definition") :file) :wrap-text true)
-                      {:fx/type code-editor/lifecycle :v-box/vgrow :always
-                       :text (if requires? (session/requires-text state) (or draft ""))
-                       :document-key (if requires? [system :requires (:namespace state)] [system (:id definition)])
-                       :saved-text (:source definition)
-                       :editable (and (not busy?) (boolean (:writable? definition)))
-                       :on-text-changed (:edit actions)
-                       :on-context-menu-requested (when-not busy? (symbol-menu/on-editor definition (:lookup-symbol actions)))}]
-               (or requires? definition)
-               (conj (if requires?
-                       (status-label "editor-access" "Read only" nil :lock)
-                       (let [{:keys [file location writable? read-only-reason]} definition
-                             path (str file ":" (:row location))]
-                         (if writable?
-                           {:fx/type :label :style-class ["label" "secondary-text"] :wrap-text true :text path}
-                           (status-label "editor-access"
-                                         (str "Read only" (when read-only-reason (str " · " read-only-reason)) " · " path)
-                                         nil :lock))))))})}
-          (:symbol-results state) (assoc :right (symbol-panel state actions)))]
-          (:repl-open? state) (conj (repl-panel state actions))))}
-       :bottom (status-bar state)}}}))
+      (let [desktop {:fx/type :border-pane :style-class ["desktop"]
+                     :top {:fx/type :v-box :spacing 8 :style-class ["desktop-header"]
+                           :children
+                           (cond-> [(assoc (heading "Clojure System Browser" :definition)
+                                           :style-class ["label" "app-title"])
+                                    (toolbar state actions extensions)]
+                             (:java-vm-editor state) (conj (java-vm-panel (:java-vm-editor state) busy? actions)))}
+                     :center
+                     {:fx/type :split-pane :orientation :vertical
+                      :divider-positions (if tests-open? [0.65] (if (:repl-open? state) [0.25 0.54] [0.34]))
+                      :items
+                      (if tests-open?
+                        (cond-> [(tests-panel state actions test-tree)]
+                          (:repl-open? state) (conj (repl-panel state actions)))
+                        (cond->
+                         [{:fx/type :h-box :spacing 12 :min-height 140 :style-class ["workspace-panel"]
+                           :children
+                          [{:fx/type :v-box :spacing 6 :pref-width 280 :h-box/hgrow :always
+                            :children [(filter-box "namespace-filter" "Filter namespaces…"
+                                                   (get state :namespace-filter "") (:namespace-filter actions))
+                                       (dissoc (namespace-list "namespaces" "Namespaces" nss (:namespace state)
+                                                               (:namespace actions) (or busy? dirty?) state test-tree)
+                                               :h-box/hgrow)]}
+                            (let [cats (session/categories state)]
+                              (selection-list "categories"
+                                              (str "Categories"
+                                                   (when cats
+                                                     (str " · " (:total cats) " defs · " (:files cats)
+                                                          (if (= 1 (:files cats)) " file" " files"))))
+                                              :categories
+                                              (:entries cats) (:category state)
+                                              session/category-label
+                                              (fn [entry] ((:category actions) (:category entry)))
+                                              (or busy? dirty?)))
+                            {:fx/type :v-box :spacing 6 :pref-width 280 :h-box/hgrow :always
+                             :children [(filter-box "definition-filter" "Filter definitions…"
+                                                    (get state :filter "") (:filter actions))
+                                        (dissoc (definition-list defs (some #(when (= (:id %) (:id definition)) %) defs)
+                                                                  #((:definition actions) (:id %)) (or busy? dirty?)
+                                                                  (symbol-menu/on-definitions defs (:lookup-symbol actions)))
+                                                :h-box/hgrow)]}]}
+                          (cond->
+                           {:fx/type :border-pane
+                            :center
+                            (if (:source-order? state)
+                              (order-panel state actions)
+                              {:fx/type :v-box :spacing 6 :style-class ["workspace-panel" "editor-panel"]
+                               :children
+                               (cond-> [(assoc (heading (cond requires? (str "Requires · " (:namespace state))
+                                                              definition (str (:namespace definition) "/" (:name definition))
+                                                              :else "Select a definition") :file) :wrap-text true)
+                                        {:fx/type code-editor/lifecycle :v-box/vgrow :always
+                                         :text (if requires? (session/requires-text state) (or draft ""))
+                                         :document-key (if requires? [system :requires (:namespace state)] [system (:id definition)])
+                                         :saved-text (:source definition)
+                                         :editable (and (not busy?) (boolean (:writable? definition)))
+                                         :on-text-changed (:edit actions)
+                                         :on-context-menu-requested (when-not busy? (symbol-menu/on-editor definition (:lookup-symbol actions)))}]
+                                 (or requires? definition)
+                                 (conj (if requires?
+                                         (status-label "editor-access" "Read only" nil :lock)
+                                         (let [{:keys [file location writable? read-only-reason]} definition
+                                               path (str file ":" (:row location))]
+                                           (if writable?
+                                             {:fx/type :label :style-class ["label" "secondary-text"] :wrap-text true :text path}
+                                             (status-label "editor-access"
+                                                           (str "Read only" (when read-only-reason (str " · " read-only-reason)) " · " path)
+                                                           nil :lock))))))})}
+                            (:symbol-results state) (assoc :right (symbol-panel state actions)))]
+                          (:repl-open? state) (conj (repl-panel state actions))))}
+                     :bottom (status-bar state)}]
+        (if (:search state)
+          {:fx/type :stack-pane :children [desktop (search-overlay state actions)]}
+          desktop))}}))
 
 (defn- choose-project []
   (some-> (.showDialog (doto (DirectoryChooser.) (.setTitle "Open Clojure project")) nil)
@@ -499,6 +608,42 @@
                              (when-not (:busy? @state) (open-result! id)))
       :edit #(session/edit! state %)
       :filter #(swap! state assoc :filter %)
+      :namespace-filter #(swap! state assoc :namespace-filter %)
+      :open-search #(when-not (:search @state)
+                      (swap! state assoc :search {:open? true :query ""
+                                                  :results {:namespaces [] :definitions []}
+                                                  :selection nil}))
+      :close-search #(swap! state dissoc :search)
+      :search-query (fn [query]
+                      (swap! state
+                             (fn [s]
+                               (if-let [search (:search s)]
+                                 (let [results (or (some-> (:system s) (service/search query) :value)
+                                                   {:namespaces [] :definitions []})]
+                                   (assoc s :search (assoc search :query query :results results
+                                                           :selection (first (search-rows results)))))
+                                 s))))
+      :select-search-result #(when-not (:header %) (swap! state assoc-in [:search :selection] %))
+      :move-search-selection (fn [delta]
+                               (swap! state
+                                      (fn [s]
+                                        (if-let [search (:search s)]
+                                          (let [rows (search-rows (:results search))
+                                                idx (.indexOf ^java.util.List (vec rows) (:selection search))
+                                                next (max 0 (min (dec (count rows))
+                                                                 (if (neg? idx) 0 (+ idx delta))))]
+                                            (assoc-in s [:search :selection] (get rows next)))
+                                          s))))
+      :open-search-result (fn []
+                            (when-not (:busy? @state)
+                              (let [selection (get-in @state [:search :selection])]
+                                (when (some? selection)
+                                  (let [opened? (if (= :namespace (:result/type selection))
+                                                  (or (= (:namespace selection) (:namespace @state))
+                                                      (session/select-namespace! state (:namespace selection)))
+                                                  (when-let [id (:id selection)] (open-result! id)))]
+                                    (when opened?
+                                      (swap! state dissoc :search)))))))
       :toggle-order #(swap! state update :source-order? not)
       :toggle-tests #(swap! state update-in [:tests-view :open?] not)
       :show-java-vms #(submit (fn [] (session/show-java-vms! state)))

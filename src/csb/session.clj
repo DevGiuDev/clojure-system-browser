@@ -102,7 +102,7 @@
               ns-sym (first available)]
           (swap! state #(select-first (assoc (dissoc % :java-vm-editor)
                                             :system system :namespace ns-sym
-                                            :filter "" :focus 0 :scroll 0
+                                            :filter "" :namespace-filter "" :focus 0 :scroll 0
                                             :help? false :diagnostics? false :source-order? false
                                             :status-tone nil
                                             :status (project-status system "Source World")))))

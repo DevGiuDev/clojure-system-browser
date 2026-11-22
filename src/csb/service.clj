@@ -68,6 +68,33 @@
                                   (map (fn [[category count]] {:category category :count count}))
                                   (sort-by (comp str :category)) vec)})))))
 
+(defn search
+  "Case-insensitive substring search over indexed namespace and definition names.
+   Returns {:query :namespaces [symbols] :definitions [maps]}. Definitions match
+   on the qualified \\\"namespace/name\\\" string, so any name substring also matches;
+   each result carries identity, kind, category and location only. Blank queries
+   return empty results."
+  ([system query] (search system query {}))
+  ([system query options]
+   (m/attempt
+    (fn []
+      (source-world! options)
+      (let [q (str/lower-case (str query))]
+        (if (str/blank? q)
+          {:query query :namespaces [] :definitions []}
+          (let [{:keys [namespaces definitions]} @(:snapshot system)]
+            {:query query
+             :namespaces (filterv #(str/includes? (str/lower-case (str %)) q) namespaces)
+             :definitions (->> definitions
+                               (filterv #(str/includes?
+                                          (str/lower-case (str (some-> (:namespace %) str) "/" (:name %))) q))
+                               (sort-by (juxt (comp str :category) (comp str :namespace)
+                                              (comp str :name) :file (comp :row :location)))
+                               (mapv #(assoc (select-keys % [:id :namespace :name :kind :category
+                                                              :file :location])
+                                             :result/type :definition))
+                               vec)})))))))
+
 (defn list-requires
   "Return the indexed require declarations for `ns-sym`, grouped by source file.
 

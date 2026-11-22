@@ -40,7 +40,9 @@
   (idle! state)
   (let [component (await! (renderer @state))]
     (when-let [e (first @errors)] (throw e))
-    (fx/instance component)))
+    ;; Barrier: a round trip through the FX thread drains any render that a
+    ;; state swap scheduled after the forced one above.
+    (fx! #(fx/instance component))))
 
 (defn- with-window
   ([f] (with-window {:example-extension? true} f))
@@ -76,12 +78,26 @@
   (sync! ui))
 
 (defn- select! [ui selector text]
-  (let [stage (sync! ui)]
-    (fx! #(let [^ListView list-view (node stage selector)
-                index (first (keep-indexed (fn [i item] (when (str/starts-with? (if (map? item) (:text item) item) text) i))
-                                           (.getItems list-view)))]
-            (when-not index (throw (ex-info "Missing list item" {:selector selector :text text})))
-            (.select (.getSelectionModel list-view) (int index)))))
+  ;; Retries absorb a stale render occasionally winning the race against the
+  ;; forced one after async state changes; each attempt re-syncs first.
+  (let [attempt! (fn []
+                   (let [stage (sync! ui)]
+                     (fx! #(let [^ListView list-view (node stage selector)]
+                             (when list-view
+                               (let [index (first (keep-indexed
+                                                   (fn [i item]
+                                                     (when (str/starts-with?
+                                                            (if (map? item) (:text item) item) text) i))
+                                                   (.getItems list-view)))]
+                                 (when index
+                                   (.select (.getSelectionModel list-view) (int index))
+                                   true)))))))
+        deadline (+ (System/nanoTime) (long 5e9))]
+    (loop []
+      (or (attempt!)
+          (if (< (System/nanoTime) deadline)
+            (do (Thread/sleep 50) (recur))
+            (throw (ex-info "Missing list or item" {:selector selector :text text}))))))
   (sync! ui))
 
 (defn- open! [{:keys [state submit!] :as ui} root]
@@ -336,6 +352,90 @@
            (sync! ui)
            (is (= 1 (fx! #(count (.getItems ^ListView (node stage "#definitions"))))))))))))
 
+(deftest namespace-filter-narrows-and-navigates
+  (fixture/with-example
+   (fn [root]
+     (with-window
+       (fn [{:keys [state] :as ui}]
+         (open! ui root)
+         (let [stage (sync! ui)]
+           (is (fx! #(let [column (.getParent (.getParent ^TextField (node stage "#namespace-filter")))]
+                       (some? (.lookup column "#namespaces")))))
+           (is (fx! #(let [column (.getParent (.getParent ^TextField (node stage "#definition-filter")))]
+                       (some? (.lookup column "#definitions")))))
+           (is (= 2 (fx! #(count (.getItems ^ListView (node stage "#namespaces"))))))
+           (fx! #(.setText ^TextField (node stage "#namespace-filter") "test"))
+           (sync! ui)
+           (is (= ["shop.orders-test"]
+                  (fx! #(mapv identity (.getItems ^ListView (node stage "#namespaces"))))))
+           (select! ui "#namespaces" "shop.orders-test")
+           (is (= 'shop.orders-test (:namespace @state)))
+           (fx! #(.setText ^TextField (node stage "#namespace-filter") ""))
+           (sync! ui)
+           (is (= 2 (fx! #(count (.getItems ^ListView (node stage "#namespaces"))))))))))))
+
+(defn- press-shortcut! [ui code character]
+  (let [stage (sync! ui)
+        mac? (str/includes? (System/getProperty "os.name") "Mac")]
+    (fx! #(Event/fireEvent (.getScene ^Stage stage)
+                           (KeyEvent. KeyEvent/KEY_PRESSED "" character code
+                                      false (not mac?) false mac?)))
+    (sync! ui)))
+
+(defn- press-key! [ui selector code]
+  (let [stage (sync! ui)]
+    (fx! #(Event/fireEvent (node stage selector)
+                           (KeyEvent. KeyEvent/KEY_PRESSED "" "" code false false false false)))
+    (sync! ui)))
+
+(defn- type-search! [ui text]
+  (let [stage (sync! ui)]
+    (fx! #(.setText ^TextField (node stage "#search-query") text)))
+  (sync! ui))
+
+(deftest shortcut-search-opens-categorized-results-and-navigates
+  (fixture/with-example
+   (fn [root]
+     (with-window
+       (fn [{:keys [state] :as ui}]
+         (open! ui root)
+         (total! ui)
+         (press-shortcut! ui KeyCode/F "f")
+         (let [stage (sync! ui)]
+           (is (fx! #(some? (node stage "#search-query"))))
+           (is (fx! #(.isFocused ^TextField (node stage "#search-query")))))
+         (testing "results group namespaces first and definitions by category"
+           (type-search! ui "orders")
+           (let [stage (sync! ui)
+                 texts (fx! #(mapv :text (.getItems ^ListView (node stage "#search-results"))))]
+             (is (= "Namespaces" (first texts)))
+             (is (= "shop.orders" (second texts)))
+             (is (some #(str/starts-with? % "shop.orders/total") texts)))
+           (testing "Enter opens the selected namespace row and closes the overlay"
+             (select! ui "#search-results" "shop.orders-test")
+             (press-key! ui "#search-query" KeyCode/ENTER)
+             (is (= 'shop.orders-test (:namespace @state)))
+             (is (nil? (:search @state)))))
+         (testing "Esc closes the overlay without navigating"
+           (press-shortcut! ui KeyCode/F "f")
+           (is (some? (:search @state)))
+           (press-key! ui "#search-query" KeyCode/ESCAPE)
+           (is (nil? (:search @state))))
+         (testing "Enter with a dirty draft warns and keeps the search open"
+           (total! ui)
+           (edit! ui "(defn total [lines] :retained)")
+           (press-shortcut! ui KeyCode/F "f")
+           (type-search! ui "orders")
+           (sync! ui)
+           (select! ui "#search-results" "shop.orders/total")
+           (press-key! ui "#search-query" KeyCode/ENTER)
+           (is (str/includes? (status ui) "Unsaved changes"))
+           (is (some? (:search @state)))
+           (session/discard! state)
+           (press-key! ui "#search-query" KeyCode/ENTER)
+           (is (= 'total (get-in @state [:definition :name])))
+           (is (nil? (:search @state)))))))))
+
 (deftest save-through-controls-preserves-surrounding-bytes
   (fixture/with-example
    (fn [root]
@@ -455,12 +555,14 @@
          (fn [{:keys [state] :as ui}]
            (open! ui root)
            (let [stage (sync! ui)]
-             (fx! #(.setText ^TextField (node stage "#definition-filter") "total")))
+             (fx! #(.setText ^TextField (node stage "#definition-filter") "total"))
+             (fx! #(.setText ^TextField (node stage "#namespace-filter") "shop")))
            ;; Replace only the native chooser, then fire the production Open button.
            (with-redefs-fn {#'desktop/choose-project (constantly (str other))}
              #(fire! ui "Open project…"))
            (is (= 'demo.dart (:namespace @state)))
            (is (= "" (:filter @state)))
+           (is (= "" (:namespace-filter @state)))
            (is (= "(defn widget [] (#/(identity :ok)))" (source ui)))
            (is (str/includes? (status ui) "1 namespaces"))
            (let [stage (sync! ui)]

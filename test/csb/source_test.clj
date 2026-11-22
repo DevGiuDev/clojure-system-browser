@@ -65,6 +65,26 @@
         (is (= ['receipt 'check-total 'pay] (names-for :usages 'cart/total)))
         (is (empty? (names-for :definition 'missing)))))))
 
+(deftest search-finds-namespaces-and-definitions-by-name
+  (with-project
+    {"src/cart.clj" "(ns cart)\n(defn total [] 1)\n(defn- receipt [] :ok)"
+     "src/pay.clj" "(ns pay)\n(def payment 3)\n(deftest check-total (total))"}
+    (fn [root]
+      (let [system (opened root)
+            results (fn [query] (:value (service/search system query)))
+            names (fn [query] (mapv (juxt :namespace :name) (:definitions (results query))))]
+        (is (= {:query "" :namespaces [] :definitions []} (results "")))
+        (is (= [] (:namespaces (results "tot"))))
+        (is (= '[[cart total] [pay check-total]] (names "tot")))
+        (is (= '[[cart total] [pay check-total]] (names "TOT")))
+        (is (= '[[cart total]] (names "cart/tot")))
+        (is (= '[cart pay] (:namespaces (results "a"))))
+        (let [row (first (:definitions (results "receipt")))]
+          (is (= :definition (:result/type row)))
+          (is (= :private-functions (:category row)))
+          (is (nil? (:source row))))
+        (is (= :unsupported (get-in (service/search system "x" {:world :live}) [:error :type])))))))
+
 (deftest browse-does-not-evaluate-reader-forms-or-project-code
   (with-project {"src/demo.clj" "(ns demo)\n#=(throw (Exception. \"MUST NOT RUN\"))\n(throw (Exception. \"MUST NOT RUN\"))\n(defn f [] 1)"}
     (fn [root]
