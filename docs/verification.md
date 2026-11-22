@@ -10,15 +10,16 @@ were executed from prepared verifications.
 | Core, including settings files and the session round-trip | 68 | 538 | No failures or errors; JDK 27 |
 | Desktop with headless JavaFX controls | 22 | 235 | No failures or errors; JDK 27 |
 | TUI with virtual terminal | 24 | 297 | No failures or errors; JDK 27 |
-| nREPL and test process integration | 14 | 125 | No failures or errors; JDK 27 |
-| Suite total | **128** | **1195** | No failures or errors |
+| nREPL and test process integration | 14 | 130 | No failures or errors; JDK 27 |
+| Suite total | **128** | **1200** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | Not re-run here (pexpect/pyte unavailable); last recorded 40-check run predates this change |
 | clj-kondo | — | — | 0 errors, 0 warnings |
 
 ## Settings files (ADR 025) — 2026-11-22
 
-Executed on Linux with JDK 27 via `JAVA_CMD`: `clojure -Srepro -M:test`
-(68 tests / 538 assertions), `clojure -Srepro -M:live-test` (14 / 125),
+Executed on Linux with JDK 27 via `JAVA_CMD`, the full tree including the
+concurrent `:runner` aliases change (ADR 024): `clojure -Srepro -M:test`
+(68 tests / 538 assertions), `clojure -Srepro -M:live-test` (14 / 130),
 `clojure -Srepro -M:desktop:desktop-test` (22 / 235) and
 `clojure -Srepro -M:tui:tui-test` (24 / 297), all with zero failures and
 errors; `clj-kondo --lint src apps test test-desktop test-tui test-support
@@ -41,6 +42,36 @@ the status, round-trip through `csb.session`) is covered in the core suite.
 Not re-run here: real-window Desktop interaction and a PTY TUI session with
 a real external editor, and the `:editor-command` precedence end-to-end in a
 real `$EDITOR` handoff (covered by unit tests of `csb.editor/command`).
+
+## Development aliases in `:runner` runs (ADR 024) — 2026-11-22
+
+Executed on Linux with JDK 27 on the PATH (the Clojure CLI ignores
+`JAVA_HOME` on this machine), on the full tree that also carries the
+settings work (2f43ff4): `clojure -Srepro -M:test` (68 tests / 538
+assertions), `clojure -Srepro -M:live-test` (14 / 130),
+`clojure -Srepro -M:desktop:desktop-test` (22 / 235) and
+`clojure -Srepro -M:tui:tui-test` (24 / 297), all with zero failures and
+errors; `clj-kondo` with 0 errors and 0 warnings. During development the
+settings work was still uncommitted and its `editor-argv` arity change broke
+one TUI fixture; a clean worktree at HEAD with only the test-command change
+already ran the TUI suite 23 / 281 with zero failures, and the committed
+settings work then fixed its fixture, so this change was never involved.
+
+Before editing, the reported failure was reproduced from the project nREPL
+against the real Rephrase checkout: `detect` returned
+`{:driver :main, :aliases [:runner :test], :runner :lazytest}`, and the
+composed child command exited 1 with
+`FileNotFoundException … nrepl/middleware/caught … on classpath`. After the
+change, the same real checkout passed through the full `csb.tests/run!`
+flow: the suite returned `:passed` (`clojure -M:dev:optional:runner:test`,
+exit 0, 6 test cases) and the `org.corfield.rephrase.nrepl-test` namespace
+run returned `:passed` (3 test cases).
+
+Covered by automation: the composed descriptors and command labels for
+`:main` and `:exec-fn` `:runner` layouts, and a real run whose test
+classpath needs both a `:dev` source path and an `:optional` dependency
+(nREPL 1.7.0, already in the local cache from this project's own aliases),
+alongside the pre-existing cases without those aliases.
 
 ## Test Runner alias convention (ADR 023) — 2026-11-22
 

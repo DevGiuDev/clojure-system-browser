@@ -21,6 +21,13 @@
 (def ^:private exec-fns
   '{cognitect.test-runner.api/test :cognitect})
 
+(defn- environment-aliases
+  "Aliases that development runs compose by convention while the library and
+   test aliases stay lean: :dev for the extra development paths, and :optional
+   for runtime dependencies exercised by the tests and marked :optional true."
+  [aliases]
+  (filterv #(map? (get aliases %)) [:dev :optional]))
+
 (defn detect [^Path root indexed?]
   (let [deps (config/read-config root "deps.edn")
         aliases (:aliases deps)
@@ -44,16 +51,17 @@
         ;; unrelated :runner aliases keep the bb, Leiningen or default fallback.
         runner-descriptor (let [alias (get aliases :runner)
                                 opts (:main-opts alias)
-                                exec (exec-symbol alias)]
+                                exec (exec-symbol alias)
+                                aliases (into (environment-aliases aliases) (with-aliases :runner))]
                             (cond
                               (and (sequential? opts) (seq opts) (every? string? opts))
                               (when-let [kind (modules (:module (main-entry opts)))]
                                 {:driver :main :main (vec opts)
-                                 :aliases (with-aliases :runner) :runner kind})
+                                 :aliases aliases :runner kind})
                               exec
                               (when-let [kind (exec-fns exec)]
                                 {:driver :exec :exec exec
-                                 :aliases (with-aliases :runner) :runner kind})))]
+                                 :aliases aliases :runner kind})))]
     (cond
       configured configured
       runner-descriptor runner-descriptor

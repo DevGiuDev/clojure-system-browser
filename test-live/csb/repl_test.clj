@@ -328,17 +328,24 @@
         state (session/create)]
     (try
       ;; The :test + :runner convention keeps the paths and dependency in :test
-      ;; and the runner main-opts in :runner, with a bb task alongside.
+      ;; and the runner main-opts in :runner, with a bb task alongside. The
+      ;; development aliases stay out of both, so the command composes them:
+      ;; :dev adds a source path and :optional a dependency marked :optional
+      ;; true, as Rephrase keeps nREPL out of its library and test aliases.
       (spit (io/file root "deps.edn")
             (pr-str '{:paths ["src"]
                       :aliases
-                      {:test {:extra-paths ["test"]
+                      {:dev {:extra-paths ["dev"]}
+                       :optional {:extra-deps {nrepl/nrepl {:mvn/version "1.7.0" :optional true}}}
+                       :test {:extra-paths ["test"]
                               :extra-deps {io.github.noahtheduke/lazytest {:mvn/version "2.1.0"}}}
                        :runner {:main-opts ["-m" "lazytest.main"]}}}))
       (spit (io/file root "bb.edn")
             (pr-str '{:tasks {test {:doc "Run the test suite." :exec-fn build/run-tests}}}))
       (let [orders (io/file root "src/demo/orders.clj")
-            suite (io/file root "test/demo/orders_test.clj")]
+            suite (io/file root "test/demo/orders_test.clj")
+            support (io/file root "dev/demo/support.clj")
+            link (io/file root "test/demo/nrepl_link_test.clj")]
         (io/make-parents orders)
         (spit orders "(ns demo.orders)\n(defn total [items] (reduce + 0 (map :price items)))")
         (io/make-parents suite)
@@ -346,21 +353,31 @@
                          "                             [demo.orders :refer [total]]))\n"
                          "(defdescribe total-suite\n"
                          "  (it \"adds item prices\" (= 30 (total [{:price 10} {:price 20}])))\n"
-                         "  (it \"is zero for no items\" (= 0 (total []))))")))
+                         "  (it \"is zero for no items\" (= 0 (total []))))"))
+        (io/make-parents support)
+        (spit support "(ns demo.support)\n(defn ok [] true)")
+        (io/make-parents link)
+        (spit link (str "(ns demo.nrepl-link-test (:require [demo.support :as support]\n"
+                        "                             [lazytest.core :refer [defdescribe it]]\n"
+                        "                             [nrepl.middleware.caught :as caught]))\n"
+                        "(defdescribe nrepl-link-suite\n"
+                        "  (it \"composes the development aliases\""
+                        " (and (fn? caught/wrap-caught) (support/ok))))")))
       (session/open! state root {})
       (let [snapshot (run-project-tests! state nil nil)
             run (tests/result snapshot)]
         (is (= :passed (:status run)) (pr-str run))
-        (is (= "clojure -M:runner:test" (:command run))))
+        (is (= "clojure -M:dev:optional:runner:test" (:command run)))
+        (is (= :passed (tests/case-status snapshot 'demo.nrepl-link-test 'nrepl-link-suite))))
       (let [snapshot (run-project-tests! state 'demo.orders-test nil)
             run (tests/result snapshot)]
         (is (= :passed (:status run)) (pr-str run))
-        (is (= "clojure -M:runner:test · demo.orders-test" (:command run)))
+        (is (= "clojure -M:dev:optional:runner:test · demo.orders-test" (:command run)))
         (is (= :passed (tests/case-status snapshot 'demo.orders-test 'total-suite))))
       (let [snapshot (run-project-tests! state 'demo.orders-test 'total-suite)
             run (tests/result snapshot)]
         (is (= :passed (:status run)) (pr-str run))
-        (is (= "clojure -M:runner:test · demo.orders-test/total-suite" (:command run))))
+        (is (= "clojure -M:dev:optional:runner:test · demo.orders-test/total-suite" (:command run))))
       (finally
         (doseq [file (reverse (file-seq root))] (io/delete-file file true))))))
 
@@ -390,6 +407,22 @@
           (is (= "clojure -M:runner:test · demo.orders-test" label))
           (is (str/includes? (nth argv 3) "--namespace")))
         (cleanup! root))
+      ;; Rephrase-style projects keep the optional runtime dependency exercised
+      ;; by the tests (marked :optional true) and the development paths outside
+      ;; the test aliases; the :runner command composes them for the child.
+      (let [root (write-detect-project! (pr-str '{:aliases
+                                                  {:dev {:extra-paths ["dev"]}
+                                                   :optional {:extra-deps {nrepl/nrepl {:mvn/version "1.8.0" :optional true}}}
+                                                   :test {:extra-paths ["test"]
+                                                          :extra-deps {io.github.noahtheduke/lazytest {:mvn/version "2.1.0"}}}
+                                                   :runner {:main-opts ["-m" "lazytest.main"]}}}))
+            descriptor (command/detect root false)]
+        (is (= {:driver :main :main ["-m" "lazytest.main"] :aliases [:dev :optional :runner :test] :runner :lazytest}
+               descriptor))
+        (let [{:keys [argv label]} (command/invocation descriptor root (.toPath temp) nil nil [])]
+          (is (= "-M:dev:optional:runner:test:csb-test-process" (nth argv 4)))
+          (is (= "clojure -M:dev:optional:runner:test" label)))
+        (cleanup! root))
       ;; A cognitect runner through :runner keeps its native namespace and var
       ;; selectors for scoped runs.
       (let [root (write-detect-project! (pr-str '{:aliases
@@ -402,6 +435,16 @@
                                               'demo.orders-test 'demo.orders-test/total-suite []))]
           (is (str/includes? (nth argv 3) "\"-n\" \"demo.orders-test\""))
           (is (str/includes? (nth argv 3) "\"-v\" \"demo.orders-test/total-suite\"")))
+        (cleanup! root))
+      ;; The exec-fn runner through :runner composes the development aliases too.
+      (let [root (write-detect-project! (pr-str '{:aliases
+                                                  {:dev {:extra-paths ["dev"]}
+                                                   :test {:extra-paths ["test"]}
+                                                   :runner {:exec-fn cognitect.test-runner.api/test}}}))
+            descriptor (command/detect root false)]
+        (is (= {:driver :exec :exec 'cognitect.test-runner.api/test
+                :aliases [:dev :runner :test] :runner :cognitect}
+               descriptor))
         (cleanup! root))
       ;; An unrelated :runner main is not taken as a test command and falls
       ;; back to the bb task, and a single combined alias keeps its shape.

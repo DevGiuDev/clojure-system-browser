@@ -46,6 +46,13 @@ project is 0.x, minor bumps carry features and the MVP stays free to evolve.
   native selectors instead of reporting these commands unavailable. A `test`
   task in `bb.edn` remains a suite-only command
   ([ADR 023](docs/decisions/023-runner-alias-convention.md)).
+- The `:test` + `:runner` convention composes the development aliases too:
+  when the command comes from `:runner`, every alias named `:dev` or
+  `:optional` that exists as a plain map joins the child classpath, because
+  that layout keeps development paths in `:dev` and optional runtime
+  dependencies exercised by the tests in `:optional` (for example nREPL in
+  Rephrase, whose tests failed to load without it)
+  ([ADR 024](docs/decisions/024-runner-environment-aliases.md)).
 - Application settings as EDN with a global layer and a per-project
   override: global at
   `$XDG_CONFIG_HOME/clojure-system-browser/settings.edn`, project at
