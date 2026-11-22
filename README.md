@@ -4,11 +4,46 @@ A Smalltalk-inspired browser for Clojure definitions. Regular project source fil
 remain the persistent source of truth. **Source World** works independently of
 the optional nREPL panel in Desktop and TUI.
 
+## Screenshots
+
+Both clients consume the same headless service and the same use cases. The
+captures below browse the same real external project (176 namespaces).
+
+| Desktop (cljfx/JavaFX) | TUI (Lanterna) |
+|---|---|
+| ![Desktop client: namespaces, category facets and the selected definition with syntax highlighting in the editor](docs/img/desktop.png) | ![TUI client: the same navigation and code panel in a 256-color terminal](docs/img/tui.png) |
+
+The Desktop quick-open search (Ctrl+F / Cmd+F) matches names only, never
+definition bodies:
+
+![Desktop search overlay: results grouped as Namespaces, Functions and Private functions over a dimmed main window](docs/img/desktop-search.png)
+
 ## ⚠️ Disclaimer
 
 This project is a **rapid prototype** built exclusively through **vibe coding** (100% AI-assisted development).
 
 The main goal was to validate an idea and get a working MVP as fast as possible. As a result, the codebase may contain unoptimized logic, edge-case bugs, or lack strict architectural patterns and test coverage. **Use at your own risk**—it is not intended for production environments.
+
+## Installation
+
+Install the released TUI/CLI by putting its two assets — the `csb` launcher
+script and the uberjar — in a directory on your `PATH`:
+
+```sh
+mkdir -p ~/.local/opt/csb && cd ~/.local/opt/csb
+curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.3.1/csb
+curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.3.1/clojure-system-browser-0.3.1.jar
+chmod +x csb
+export PATH="$HOME/.local/opt/csb:$PATH"
+csb --project /path/to/project
+```
+
+`csb` accepts the same options as `clojure -M:tui` (`--project`,
+`--source-root`, `--example-extension`) and honors `JAVA_CMD` to select the
+Java binary. The jar runs the TUI (`csb.tui` is the main class) on Java 21
+or later and contains no JavaFX. The Desktop is not packaged: it needs a
+JDK 25 or later and this repository's JavaFX 27 dependencies, so it runs
+from a checkout as described in [Requirements and versions](#requirements-and-versions).
 
 ## Current status
 
@@ -148,9 +183,10 @@ caches and `node_modules` are ignored. `project.clj` is not evaluated.
 Discovery includes `.clj`, `.cljc` and ClojureDart `.cljd` files. `.cljd` files
 can be browsed **read-only**, without resolving their dependencies or starting
 Dart or Flutter. **Open project…** detects the selected project's source roots
-and clears the previous filter; startup `--source-root` options apply only to
-the initial project. If no namespaces are found, the status bar shows the roots
-searched and the supported file formats.
+and clears the previous definition and namespace filters; startup
+`--source-root` options apply only to the initial project. If no namespaces
+are found, the status bar shows the roots searched and the supported file
+formats.
 
 ## Source World walkthrough
 
@@ -178,6 +214,15 @@ searched and the supported file formats.
    `orders/total` in the editor and choose **Go to definition**. The menu uses
    the definition name when there is no symbol under the pointer. With the
    keyboard, open the context menu at the caret or on the selected row.
+9. Type in the filter boxes above **Namespaces** and **Definitions** to narrow
+   those lists; clearing them restores every entry. Press Ctrl+F / Cmd+F
+   anywhere: a centered search
+   panel lists matches grouped as Namespaces first and then definition
+   categories (Functions, Values, Tests…), matching namespace names and
+   qualified `namespace/name` strings case-insensitively. ↑/↓ move the
+   selection, Enter opens the namespace or definition under the same draft
+   guards as the lists, and Esc or a click on the dimmed background closes the
+   panel. Search matches names only and never reads definition bodies.
 
 Navigation, reload, opening another project and normal exit are blocked while
 there is a draft to save or discard. Desktop disables the lists while a draft
@@ -384,7 +429,7 @@ A subsequent reindexing failure is reported separately as `:reindex-error`.
 
 ## Releases
 
-Every `v*` tag (for example `v0.3.0`) runs a build-only GitHub Actions
+Every `v*` tag (for example `v0.3.1`) runs a build-only GitHub Actions
 workflow ([ADR 012](docs/decisions/012-release-packaging.md)) that publishes
 two assets to [GitHub Releases](https://github.com/DevGiuDev/clojure-system-browser/releases):
 the TUI/CLI uberjar and the `csb` launcher script. The workflow runs no
@@ -393,26 +438,10 @@ tests and makes no verification claims; checks stay local as recorded in
 
 ```sh
 clojure -T:build uber
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.3.1 && git push origin v0.3.1
 ```
 
-The jar runs the TUI (`csb.tui` is the main class) on Java 21 or later and
-contains no JavaFX: the Desktop still needs a JDK 25+ with this
-repository's JavaFX 27 dependencies and is not packaged. To install from a
-release, put both assets in a directory on `PATH`:
-
-```sh
-mkdir -p ~/.local/opt/csb && cd ~/.local/opt/csb
-curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.3.0/csb
-curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.3.0/clojure-system-browser-0.3.0.jar
-chmod +x csb
-export PATH="$HOME/.local/opt/csb:$PATH"
-csb --project /path/to/project
-```
-
-`csb` accepts the same options as `clojure -M:tui` (`--project`,
-`--source-root`, `--example-extension`) and honors `JAVA_CMD` to select the
-Java binary.
+See [Installation](#installation) to install the published assets.
 
 ## Initial release limitations
 

@@ -6,6 +6,31 @@ version lives in `csb.cli/version` and is kept in sync with this file
 manually ([ADR 011](docs/decisions/011-versioning-changelog.md)). While the
 project is 0.x, minor bumps carry features and the MVP stays free to evolve.
 
+## [0.3.1] - 2026-11-22
+
+### Added
+
+- Filter box for the Desktop namespaces panel: case-insensitive substring,
+  reset when another project is opened and preserved while navigating
+  (ADR 019).
+- Project search in Desktop with Ctrl+F / Cmd+F: a centered overlay with a
+  dimmed backdrop lists matches grouped as namespaces first and then
+  definition categories, arrows move the selection from the query field,
+  Enter opens results through the usual draft guards, and Esc or a click on
+  the backdrop closes the panel. The matching is the shared service use case
+  `csb.service/search` — names only, never definition bodies — so the TUI
+  can adopt it without core changes (ADR 019).
+- README screenshots: real captures of the Desktop main view, the Ctrl+F
+  search overlay and the TUI browsing an external 176-namespace project,
+  stored under `docs/img` and shown at the top of the README.
+
+### Changed
+
+- The definition filter moved from the toolbar to the head of the
+  Definitions column, aligned with the namespaces filter.
+- README: new Installation section ahead of Current status, moved out of
+  Releases, which now only describes the tag-triggered workflow.
+
 ## [0.3.0] - 2026-11-22
 
 ### Added

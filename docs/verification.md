@@ -7,11 +7,11 @@ were executed from prepared verifications.
 
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
-| Core, including test path and Java VM discovery | 53 | 391 | No failures or errors; JDK 27 |
-| Desktop with headless JavaFX controls | 15 | 142 | No failures or errors; JDK 27 |
+| Core, including test path and Java VM discovery | 54 | 404 | No failures or errors; JDK 27 |
+| Desktop with headless JavaFX controls | 17 | 162 | No failures or errors; JDK 27 |
 | TUI with virtual terminal | 20 | 245 | No failures or errors; JDK 27 |
 | nREPL and test process integration | 9 | 51 | No failures or errors; JDK 27 |
-| Suite total | **97** | **829** | No failures or errors |
+| Suite total | **100** | **862** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | **40 checks**, no failures |
 | clj-kondo | — | — | 0 errors, 0 warnings |
 
@@ -20,6 +20,39 @@ including Java 21 and 27. A filesystem fixture verifies discovery from the
 environment and installation folders, alias deduplication, version metadata,
 and the exclusion of wrapper scripts and incomplete directories. The Desktop
 dropdown and TUI selector fill an editable path in their automated UI suites.
+
+On 2026-11-22 the [namespace filter and project search](decisions/019-desktop-search.md)
+were verified: the core suite covers `csb.service/search` (grouped contract,
+case-insensitivity, qualified-name matching, blank queries, the Source World
+guard) and the session filter reset; the headless Desktop suite types in the
+`#namespace-filter` box, navigates from the narrowed list, opens the search
+overlay with a synthesized Ctrl+F KeyEvent, asserts the focused query field,
+the Namespaces-first grouping, Enter opening a namespace row and a definition,
+Esc closing, and a pending draft blocking Enter while keeping the panel open.
+All suites and clj-kondo were re-run on Linux with JDK 27 via `JAVA_CMD`
+(core 54/404, Desktop 17/160, TUI 20/245 unchanged, nREPL 9/51 unchanged).
+Real on-screen interaction with the overlay was not exercised in that pass;
+the production launcher was additionally started under Xvfb on Linux (normal
+JavaFX toolkit, JDK 27 via `JAVA_CMD`) and stayed up with a clean log,
+confirming startup and rendering outside the headless backend.
+
+On 2026-11-22 the README screenshots were captured against a real external
+project (`cljgame`, 176 namespaces, one `data_readers.clj` diagnostic) on
+Linux with JDK 27 via `JAVA_CMD`. The Desktop window was created through the
+production `csb.desktop` view and controller with the normal JavaFX toolkit
+on a real display (Wayland session through XWayland, Prism software
+rendering); namespaces, category and definition were selected through the
+real ListViews and the Ctrl+F overlay was opened with query results and a
+selection, producing `docs/img/desktop.png` and `docs/img/desktop-search.png`
+from scene snapshots. The production TUI (`clojure -Srepro -M:tui`) ran in a
+real tmux terminal (256 colors, 128×36) on the same project: startup,
+arrow/Tab navigation to a specific definition and the syntax-colored code
+panel were exercised, and the pane capture became `docs/img/tui.png`. These
+are real-UI interactions outside the headless and virtual test backends;
+they demonstrate navigation and rendering, not the full manual walkthrough.
+After the 0.3.1 version bump and the README changes, all suites and
+clj-kondo were re-run on Linux with JDK 27 (core 54/404, Desktop 17/162,
+TUI 20/245, nREPL 9/51, clj-kondo with 0 errors and 0 warnings).
 
 On 2026-11-22, Java VMs was exercised in the headless Desktop and virtual TUI
 with temporary user preferences. The checks cover invalid paths, saving and

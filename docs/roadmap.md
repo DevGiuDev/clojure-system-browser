@@ -1,5 +1,16 @@
 # Roadmap
 
+## Navigation and search — 2026-11-22
+
+The Desktop namespace panel gained a substring filter, and Ctrl+F / Cmd+F
+opens a centered search overlay over the whole project: results are grouped
+(namespaces first, then definition categories), Enter opens them through the
+usual draft guards, and arrows/Esc/scrim drive the panel. The matching is a
+service use case (`csb.service/search`), so the TUI can adopt it later
+without core changes; it matches names only. See
+[ADR 019](decisions/019-desktop-search.md) and
+[verification](verification.md).
+
 ## Live World — 2026-11-21
 
 The first slice of milestone 5 adds the local nREPL panel to Desktop and TUI.
@@ -43,9 +54,9 @@ executing anything. `examples/poly-sample-project` is a minimal browsable
 workspace with that layout, and save keeps its guarantees.
 
 Versioning was added ([ADR 011](decisions/011-versioning-changelog.md)): the
-version (0.3.0) lives in `csb.cli/version`, is shown by the CLI, Desktop and
+version (0.3.1) lives in `csb.cli/version`, is shown by the CLI, Desktop and
 TUI `--help` output and the Desktop title, and is kept in sync manually with
-the `CHANGELOG.md`, which records 0.1.0 through 0.3.0.
+the `CHANGELOG.md`, which records 0.1.0 through 0.3.1.
 
 Release packaging was added
 ([ADR 012](decisions/012-release-packaging.md)): `build.clj` produces the
