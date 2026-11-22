@@ -255,7 +255,8 @@ when scrolling. External editing uses the highlighting provided by `$EDITOR`.
 The TUI has its own dark theme with explicit backgrounds, separate panels,
 a highlighted selection and colors for errors and pending changes. Press `t`
 to switch between dark and light; the choice lasts for the session, including
-reloads and editor handoffs. A terminal with 256-color support is required.
+reloads and editor handoffs. Save it from the settings panel (`g`) to keep it
+between sessions. A terminal with 256-color support is required.
 The application uses the extended palette instead of inheriting the terminal's
 background or basic 16 ANSI theme colors. It does not change the Emacs/EXWM or
 external editor theme. `?` lists the available keys.
@@ -270,7 +271,8 @@ drafts; text editing happens in the external editor. On return, CSB imports a
 draft. `s` / Ctrl+S saves through the same service used by Desktop, and `d`
 discards it.
 
-Editor selection follows this order: `CSB_EDITOR_ARGS`, `$VISUAL`, `$EDITOR`,
+Editor selection follows this order: the settings `:editor-command` argv (see
+[Settings](#settings)), `CSB_EDITOR_ARGS`, `$VISUAL`, `$EDITOR`,
 then `vi`. Empty `VISUAL`/`EDITOR` values are ignored. These two variables accept
 commands with quoted arguments, such as `EDITOR='vim -f'` or
 `VISUAL='emacsclient'`. No shell is invoked, and variables, globs and command
@@ -319,6 +321,50 @@ unchanged. If Emacs, EXWM or the terminal intercepts the shortcut before it
 reaches the application, use `s` to save. Running inside Emacs requires a terminal
 that supports full-screen applications; a process output buffer does not
 demonstrate that compatibility.
+
+## Settings
+
+CSB keeps its own settings as EDN in two layers that merge over built-in
+defaults: a global file, then an optional per-project override.
+
+| Layer | Path |
+|---|---|
+| Global | `$XDG_CONFIG_HOME/clojure-system-browser/settings.edn` (default `~/.config/clojure-system-browser/settings.edn`) |
+| Project | `<project-root>/.csb/settings.edn` |
+
+An example of both files:
+
+```clojure
+{:theme :light
+ :namespace-tree? true
+ :source-order? false
+ :repl {:host "127.0.0.1" :port 7888}
+ :editor-command ["emacsclient" "--alternate-editor=false"]}
+```
+
+Desktop opens the settings overlay with the gear button in the toolbar; the
+TUI panel opens with `g`. Every row shows the effective value, its origin
+(`default`, `global` or `project`) and a save scope selector (`Global` /
+`This project`); Esc or the Close button discards unsaved edits. The project
+file is created only when you explicitly save with that scope: opening,
+browsing and validating never write into the project, and `deps.edn` is
+never touched. Deleting a settings file returns to defaults.
+
+Settings currently include `:theme` (`:dark`/`:light`, consumed by the TUI),
+`:namespace-tree?` and `:source-order?` (initial view when a project opens),
+`:repl` (`{:host, :port}` defaults for the REPL panel; a detected
+`.nrepl-port` still wins for the port) and `:editor-command` (an argv vector
+that takes precedence over `CSB_EDITOR_ARGS`, `VISUAL` and `EDITOR`).
+
+Reading is tolerant: a missing file is fine, and unreadable EDN, tagged
+literals, unknown keys or unsupported values turn that whole layer into a
+warning shown in the status bar while the remaining layers still apply.
+Saving is strict: unknown keys or unsupported values are rejected and the
+file is left unchanged; an existing unreadable file must be fixed or removed
+by hand before saving through the UI. Written files contain only meaningful
+entries (unset keys are omitted), and saving again reformats the file, so
+hand-written comments in it are not preserved. See
+[ADR 025](docs/decisions/025-settings-files.md).
 
 ## REPL walkthrough
 

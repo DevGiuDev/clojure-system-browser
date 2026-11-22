@@ -46,6 +46,21 @@ project is 0.x, minor bumps carry features and the MVP stays free to evolve.
   native selectors instead of reporting these commands unavailable. A `test`
   task in `bb.edn` remains a suite-only command
   ([ADR 023](docs/decisions/023-runner-alias-convention.md)).
+- Application settings as EDN with a global layer and a per-project
+  override: global at
+  `$XDG_CONFIG_HOME/clojure-system-browser/settings.edn`, project at
+  `<project-root>/.csb/settings.edn`, merged over built-in defaults in that
+  order. Desktop opens the settings overlay with a new gear button in the
+  toolbar; the TUI panel opens with `g`. Each row shows the effective value
+  and its origin (`default`/`global`/`project`) beside a `Global` /
+  `This project` save scope. The first keys are `:theme` (TUI),
+  `:namespace-tree?` and `:source-order?` (initial view on project open),
+  `:repl` (`{:host, :port}` panel defaults; a detected `.nrepl-port` still
+  wins) and `:editor-command` (an argv vector that now takes precedence over
+  `CSB_EDITOR_ARGS`, `VISUAL` and `EDITOR`). Reading is tolerant (a broken
+  layer warns and is skipped), saving is strict and atomic, and the project
+  file is written only by an explicit save
+  ([ADR 025](docs/decisions/025-settings-files.md)).
 
 ### Changed
 

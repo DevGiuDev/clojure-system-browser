@@ -7,13 +7,40 @@ were executed from prepared verifications.
 
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
-| Core, including test path and Java VM discovery | 60 | 477 | No failures or errors; JDK 27 |
-| Desktop with headless JavaFX controls | 21 | 221 | No failures or errors; JDK 27 |
-| TUI with virtual terminal | 23 | 281 | No failures or errors; JDK 27 |
+| Core, including settings files and the session round-trip | 68 | 538 | No failures or errors; JDK 27 |
+| Desktop with headless JavaFX controls | 22 | 235 | No failures or errors; JDK 27 |
+| TUI with virtual terminal | 24 | 297 | No failures or errors; JDK 27 |
 | nREPL and test process integration | 14 | 125 | No failures or errors; JDK 27 |
-| Suite total | **118** | **1104** | No failures or errors |
+| Suite total | **128** | **1195** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | Not re-run here (pexpect/pyte unavailable); last recorded 40-check run predates this change |
 | clj-kondo | — | — | 0 errors, 0 warnings |
+
+## Settings files (ADR 025) — 2026-11-22
+
+Executed on Linux with JDK 27 via `JAVA_CMD`: `clojure -Srepro -M:test`
+(68 tests / 538 assertions), `clojure -Srepro -M:live-test` (14 / 125),
+`clojure -Srepro -M:desktop:desktop-test` (22 / 235) and
+`clojure -Srepro -M:tui:tui-test` (24 / 297), all with zero failures and
+errors; `clj-kondo --lint src apps test test-desktop test-tui test-support
+deps.edn build.clj` with 0 errors and 0 warnings. Before the headless
+suites, the new `csb.settings` namespace was exercised in a scratch script
+against JDK 27 with 29 behavioral checks: layering and origins, deep
+`:repl` merge, invalid EDN / unknown keys / tagged literals / unsupported
+values as per-layer warnings, strict save rejections, merge-on-save, atomic
+replacement without temporaries, and scope validation.
+
+The headless suites drive the real UIs: the Desktop test opens the gear
+button, edits theme and tree default through the overlay controls, saves
+with the project and global scopes asserting both files, and checks that a
+rejected `:editor-command` keeps the overlay open with the reason; the TUI
+test presses `g`, cycles the theme with arrows, toggles scope with Tab,
+toggles a boolean with Space, saves with Enter, reopens with the persisted
+origins, and confirms `q` edits the focused field instead of quitting.
+Session-level behavior (view defaults applied on open, warning surfaced in
+the status, round-trip through `csb.session`) is covered in the core suite.
+Not re-run here: real-window Desktop interaction and a PTY TUI session with
+a real external editor, and the `:editor-command` precedence end-to-end in a
+real `$EDITOR` handoff (covered by unit tests of `csb.editor/command`).
 
 ## Test Runner alias convention (ADR 023) — 2026-11-22
 

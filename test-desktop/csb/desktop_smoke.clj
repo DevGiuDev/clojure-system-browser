@@ -958,6 +958,63 @@
                                             (.lookupAll (.getRoot (.getScene stage)) ".button"))]
                    (and button (.isDisable button)))))))))
 
+(deftest settings-gear-saves-project-and-global-layers-and-reopens
+  (fixture/with-example
+   (fn [^java.nio.file.Path root]
+     (let [cfg (str (.resolve root "config-home"))
+           settings-file (.resolve root ".csb/settings.edn")
+           global-file (.resolve (.resolve root "config-home")
+                                 "clojure-system-browser/settings.edn")]
+       (with-window {:config-dir cfg}
+         (fn [{:keys [state submit!] :as ui}]
+           (submit! #(session/open! state (str root)
+                                    {:example-extension? true :config-dir cfg}))
+           (sync! ui)
+           (total! ui)
+           ;; The gear opens the overlay with one row per setting.
+           (fire! ui "Settings")
+           (let [stage (sync! ui)]
+             (is (some? (node stage "#settings-theme")))
+             (is (some? (node stage "#settings-namespace-tree")))
+             (is (some? (node stage "#settings-scope"))))
+           ;; Edit theme and the tree default, save to this project.
+           (let [stage (sync! ui)]
+             (fx! (fn []
+                    (.select (.getSelectionModel ^ComboBox (node stage "#settings-theme")) 1)
+                    (.fire ^CheckBox (node stage "#settings-namespace-tree"))
+                    (.setValue ^ComboBox (node stage "#settings-scope") "This project"))))
+           (fire! ui "Save settings")
+           (is (nil? (:settings-editor @state)))
+           (is (str/includes? (status ui) "Settings saved · project"))
+           ;; The view defaults and theme now come from the project layer.
+           (is (= :light (:theme @state)))
+           (is (true? (:namespace-tree? @state)))
+           (is (str/includes? (slurp (str settings-file)) ":theme :light"))
+           ;; Reopening the gear shows the persisted values and origin.
+           (fire! ui "Settings")
+           (sync! ui)
+           (is (= :light (get-in @state [:settings-editor :values :theme])))
+           (is (= :project (get-in @state [:settings-origins :theme])))
+           ;; Switching the scope to global writes the other layer.
+           (let [stage (sync! ui)]
+             (fx! #(.setValue ^ComboBox (node stage "#settings-scope") "Global")))
+           (fire! ui "Save settings")
+           (is (str/includes? (slurp (str global-file)) ":namespace-tree? true"))
+           ;; A strict failure keeps the overlay open with the reason.
+           (fire! ui "Settings")
+           (let [stage (sync! ui)]
+             (fx! (fn []
+                    (.setValue ^ComboBox (node stage "#settings-scope") "This project")
+                    (.setText ^TextField (node stage "#settings-editor-command")
+                              "[\"emacsclient\" 7]"))))
+           (fire! ui "Save settings")
+           (let [stage (sync! ui)]
+             (is (some? (:settings-editor @state)))
+             (is (str/includes? (fx! #(.getText ^Label (node stage "#settings-error")))
+                                "editor-command")))
+           (press-key! ui "#settings-theme" KeyCode/ESCAPE)
+           (is (nil? (:settings-editor @state)))))))))
+
 (defn -main [& _]
   (try
     (let [r (test/run-tests 'csb.desktop-smoke)]

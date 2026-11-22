@@ -1,5 +1,24 @@
 # Roadmap
 
+## Settings — 2026-11-22
+
+CSB persists its own settings as EDN in two layers merged over built-in
+defaults: a global file at
+`$XDG_CONFIG_HOME/clojure-system-browser/settings.edn` and a per-project
+override at `<project-root>/.csb/settings.edn`
+([ADR 025](decisions/025-settings-files.md)). Both clients share one session
+round-trip: the Desktop gear button opens a settings overlay and the TUI
+panel opens with `g`; each row shows the effective value, its origin
+(`default`/`global`/`project`) and a `Global` / `This project` save scope.
+The first keys are `:theme` (TUI), `:namespace-tree?` and `:source-order?`
+(initial view on project open), `:repl` (panel defaults, with a detected
+`.nrepl-port` still winning for the port) and `:editor-command` (an argv
+vector taking precedence over `CSB_EDITOR_ARGS`, `VISUAL` and `EDITOR`).
+Reading is tolerant — a broken layer warns and is skipped — while saving is
+strict and atomic; the project file is created only by an explicit save and
+`deps.edn` is never touched. The per-project JDK preference (ADR 017)
+remains in Java Preferences; migrating it into EDN is left for later.
+
 ## Test Runner alias convention — 2026-11-22
 
 Projects that split their Clojure CLI test configuration across `:test`

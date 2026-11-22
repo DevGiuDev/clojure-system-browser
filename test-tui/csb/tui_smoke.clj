@@ -605,7 +605,8 @@
        (fn [{:keys [state private-mode?] :as ui}]
          (total! ui)
          (session/edit! state fixture/total-draft)
-         (with-redefs [cli/editor-argv #(editor/command {"EDITOR" "vim 'unclosed"})
+         (with-redefs [cli/editor-argv #(editor/command {"EDITOR" "vim 'unclosed"}
+                                                        (select-keys % [:editor-command]))
                        editor/begin! (fn [& _] (throw (AssertionError. "Do not create a temporary for invalid configuration")))]
            (press! ui \e))
          (is (= :invalid-editor (get-in @state [:editor-error :error :type])))
@@ -648,7 +649,7 @@
            (is (str/includes? (frame ui) "(defn widget"))
            (is (= (TextColor$Indexed. 183) (colour-at ui ":ok"))
                "Read-only ClojureDart is highlighted too")
-           (with-redefs [cli/editor-argv (fn [] (throw (AssertionError. "Read-only source must not launch an editor")))]
+           (with-redefs [cli/editor-argv (fn [_] (throw (AssertionError. "Read-only source must not launch an editor")))]
              (press! ui \e))
            (is (str/includes? (frame ui) "This definition is read-only"))
            (press! ui \s)
@@ -809,6 +810,54 @@
              (is (true? (get-in @state [:definition :block?])))
              (is (str/includes? (frame ui) "(comment"))
              (finally (repl/disconnect! state)))))))))
+
+(deftest settings-panel-edits-saves-and-reopens
+  (with-terminal nil
+    (fn [ui]
+      ;; Without a project there is nothing to edit: g is a no-op.
+      (press! ui \g)
+      (is (str/includes? (frame ui) "CLOJURE SYSTEM BROWSER"))))
+  (fixture/with-example
+   (fn [^Path root]
+     (let [cfg (str (.resolve root "config-home"))
+           settings-file (.resolve root ".csb/settings.edn")]
+       (with-terminal nil
+         (fn [{:keys [state] :as ui}]
+           (session/open! state (str root)
+                          {:example-extension? true :config-dir cfg})
+           (#'tui/render-if-changed! (:screen ui) state (:last-frame ui))
+           (press! ui \g)
+           (let [screen (frame ui)]
+             (is (str/includes? screen "Settings"))
+             (is (str/includes? screen "Save to: Global"))
+             (is (str/includes? screen "Theme (TUI) = dark · default")))
+           ;; Theme is the first field: the arrows cycle the choice.
+           (press! ui KeyType/ArrowRight)
+           (is (str/includes? (frame ui) "Theme (TUI) = light"))
+           ;; Tab switches the save scope; typing 'q' must not quit.
+           (press! ui KeyType/Tab)
+           (is (str/includes? (frame ui) "Save to: This project"))
+           (press! ui \q)
+           (is (str/includes? (frame ui) "Settings") "q edits the focused field instead of quitting")
+           ;; The tree default is the next field: Space toggles it.
+           (press! ui KeyType/ArrowDown)
+           (press! ui \space)
+           (is (str/includes? (frame ui) "Namespaces tree = true"))
+           ;; Enter saves the focused scope and closes the panel.
+           (press! ui KeyType/Enter)
+           (is (nil? (:settings-editor @state)))
+           (is (str/includes? (frame ui) "Settings saved · project"))
+           (is (= :light (:theme @state)))
+           (is (str/includes? (slurp (str settings-file)) ":theme :light"))
+           ;; Reopening shows the persisted values with their origin.
+           (press! ui \g)
+           (let [screen (frame ui)]
+             (is (str/includes? screen "Theme (TUI) = light · project"))
+             (is (str/includes? screen "Namespaces tree = true · project")))
+           ;; Esc closes without saving.
+           (press! ui KeyType/Escape)
+           (is (nil? (:settings-editor @state)))
+           (is (str/includes? (frame ui) "CLOJURE SYSTEM BROWSER"))))))))
 
 (defn -main [& _]
   (let [r (test/run-tests 'csb.tui-smoke)]

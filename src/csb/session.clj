@@ -3,7 +3,8 @@
   (:require [clojure.string :as str]
             [csb.java-vm :as java-vm]
             [csb.model :as model]
-            [csb.service :as service]))
+            [csb.service :as service]
+            [csb.settings :as settings]))
 
 (defn create [] (atom {:status "Open a project" :draft "" :dirty? false}))
 
@@ -77,6 +78,76 @@
                                                 (or (:value result) "Inherit launcher environment")))))
           (swap! state assoc-in [:java-vm-editor :error] (get-in result [:error :message])))))))
 
+(defn- load-settings [root options]
+  (let [result (settings/load-settings {:project-root root
+                                        :config-dir (:config-dir options)})]
+    (if (= :ok (:status result))
+      (:value result)
+      {:settings {} :origins {} :warnings []})))
+
+(defn- apply-view-defaults
+  "Effective settings seed the initial view and theme on every project open."
+  [state {:keys [settings]}]
+  (assoc state
+         :namespace-tree? (boolean (:namespace-tree? settings))
+         :source-order? (boolean (:source-order? settings))
+         :theme (or (:theme settings) :dark)))
+
+(defn- store-settings
+  "Keep values, origins and warnings as separate state keys: the clients read
+   them directly."
+  [state loaded]
+  (-> state
+      (assoc :settings (:settings loaded)
+             :settings-origins (:origins loaded)
+             :settings-warnings (:warnings loaded))
+      (apply-view-defaults loaded)))
+
+(defn show-settings! [state]
+  (let [values (:settings @state)]
+    (when values
+      ;; :field and :caret select the focused row in the TUI panel.
+      (swap! state assoc :settings-editor
+             {:values values :origins (:settings-origins @state)
+              :scope :global :field 0 :caret 0 :error nil}))))
+
+(defn set-setting! [state key value]
+  (swap! state (fn [s]
+                 (cond-> s
+                   (:settings-editor s) (assoc-in [:settings-editor :values key] value)))))
+
+(defn set-settings-scope! [state scope]
+  (swap! state (fn [s]
+                 (cond-> s
+                   (:settings-editor s) (assoc-in [:settings-editor :scope] scope)))))
+
+(defn close-settings! [state]
+  (swap! state dissoc :settings-editor))
+
+(defn apply-settings! [state]
+  (let [{:keys [system settings-editor config-dir]} @state]
+    (when (and system settings-editor)
+      (let [root (:root (service/project-info system))
+            scope (:scope settings-editor)
+            result (settings/save-settings! scope (:values settings-editor)
+                                            {:project-root root :config-dir config-dir})]
+        (if (= :ok (:status result))
+          (let [loaded (load-settings root {:config-dir config-dir})]
+            (swap! state (fn [s]
+                           (-> (assoc (dissoc s :settings-editor)
+                                      :status-tone (if (seq (:warnings loaded)) :warning :success)
+                                      :status (str "Settings saved · " (name scope)
+                                                   (when (seq (:warnings loaded))
+                                                     (str " · " (count (:warnings loaded))
+                                                          " settings warning(s)"))))
+                               (store-settings loaded)))))
+          (let [{:keys [message details]} (:error result)
+                problems (:problems details)]
+            (swap! state assoc-in [:settings-editor :error]
+                   (if (seq problems)
+                     (str message " · " (str/join "; " problems))
+                     message))))))))
+
 (defn- allow-navigation! [state]
   (if (:dirty? @state)
     (do (swap! state assoc :status "Unsaved changes: Save or Discard before navigating" :status-tone :warning) false)
@@ -101,13 +172,23 @@
       (if (= :ok (:status result))
         (let [system (:value result)
               available (:value (service/list-namespaces system))
-              ns-sym (first available)]
-          (swap! state #(select-first (assoc (dissoc % :java-vm-editor)
-                                            :system system :namespace ns-sym
-                                            :filter "" :namespace-filter "" :focus 0 :scroll 0
-                                            :help? false :diagnostics? false :source-order? false
-                                            :status-tone nil
-                                            :status (project-status system "Source World")))))
+              ns-sym (first available)
+              loaded (load-settings (:root (service/project-info system)) options)]
+          (swap! state #(-> (select-first
+                             (assoc (dissoc % :java-vm-editor :settings-editor)
+                                    :system system :namespace ns-sym
+                                    :filter "" :namespace-filter "" :focus 0 :scroll 0
+                                    :help? false :diagnostics? false
+                                    :status-tone nil
+                                    :status (project-status system "Source World")))
+                            (store-settings loaded)
+                            (cond-> (:config-dir options)
+                              (assoc :config-dir (:config-dir options)))
+                            (cond-> (seq (:warnings loaded))
+                              (assoc :status-tone :warning
+                                     :status (str (project-status system "Source World")
+                                                  " · " (count (:warnings loaded))
+                                                  " settings warning(s)"))))))
         (report-error! state result)))))
 
 (defn select-namespace!

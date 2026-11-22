@@ -18,8 +18,12 @@
           "--help" (assoc options :help? true)
           (throw (ex-info (str "Unknown argument: " (first args)) {}))))))
 
-(defn editor-argv []
-  (editor/command (System/getenv)))
+(defn editor-argv
+  ([]
+   (editor-argv {}))
+  ([{:keys [editor-command]}]
+   ;; Settings take precedence over the environment (see csb.editor/command).
+   (editor/command (System/getenv) {:editor-command editor-command})))
 
 (defn -main [& args]
   (try

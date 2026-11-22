@@ -11,6 +11,20 @@
   (is (= ["vim" "-f"] (editor/command {"CSB_EDITOR_ARGS" "[\"vim\" \"-f\"]"
                                        "VISUAL" "'invalid"}))))
 
+(deftest settings-editor-command-takes-precedence-over-the-environment
+  (is (= ["nano" "-w"] (editor/command {"VISUAL" "vim" "EDITOR" "vi"}
+                                       {:editor-command ["nano" "-w"]})))
+  (is (= ["emacsclient" "-c"] (editor/command {"CSB_EDITOR_ARGS" "[\"vim\" \"-f\"]"}
+                                              {:editor-command ["emacsclient" "-c"]})))
+  ;; unset in settings falls back to the environment chain
+  (is (= ["vim"] (editor/command {"EDITOR" "vim"} {:editor-command nil})))
+  (is (= ["vi"] (editor/command {} {:editor-command nil})))
+  ;; invalid settings argv fails like any other source
+  (is (thrown? clojure.lang.ExceptionInfo
+               (editor/command {} {:editor-command ["nano" 5]})))
+  (is (thrown? clojure.lang.ExceptionInfo
+               (editor/command {} {:editor-command ["emacsclient" "-n"]}))))
+
 (deftest editor-arguments-are-grouped-without-shell-expansion
   (doseq [[command expected]
           [["emacsclient -c -a \"\"" ["emacsclient" "-c" "-a" ""]]

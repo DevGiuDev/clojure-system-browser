@@ -46,25 +46,29 @@
         (validate-argv (if started? (conj argv token) argv))))))
 
 (defn command
-  "Resolve explicit argv, then VISUAL, EDITOR or vi. Never invokes a shell."
-  [environment]
-  (if-let [explicit (get environment "CSB_EDITOR_ARGS")]
-    (validate-argv
-     (try
-       (with-open [reader (java.io.PushbackReader. (java.io.StringReader. explicit))]
-         (let [eof (Object.)
-               argv (edn/read {:eof eof} reader)]
-           (when-not (identical? eof (edn/read {:eof eof} reader))
-             (throw (ex-info "Trailing input" {})))
-           argv))
-       (catch Exception _
-         (m/fail! :invalid-editor "CSB_EDITOR_ARGS must contain one EDN vector of string arguments" {}))))
-    (let [selected (or (some #(when-not (str/blank? %) %)
-                             [(get environment "VISUAL") (get environment "EDITOR")]) "vi")]
-      ;; Preserve the previous support for literal executable paths containing spaces.
-      (if (.isFile (io/file selected))
-        (validate-argv [selected])
-        (split-command selected)))))
+  "Resolve the settings argv first (:editor-command), then CSB_EDITOR_ARGS,
+   then VISUAL, EDITOR or vi. Never invokes a shell."
+  ([environment] (command environment {}))
+  ([environment {:keys [editor-command]}]
+   (cond
+     editor-command (validate-argv editor-command)
+     :else (if-let [explicit (get environment "CSB_EDITOR_ARGS")]
+             (validate-argv
+              (try
+                (with-open [reader (java.io.PushbackReader. (java.io.StringReader. explicit))]
+                  (let [eof (Object.)
+                        argv (edn/read {:eof eof} reader)]
+                    (when-not (identical? eof (edn/read {:eof eof} reader))
+                      (throw (ex-info "Trailing input" {})))
+                    argv))
+                (catch Exception _
+                  (m/fail! :invalid-editor "CSB_EDITOR_ARGS must contain one EDN vector of string arguments" {}))))
+             (let [selected (or (some #(when-not (str/blank? %) %)
+                                      [(get environment "VISUAL") (get environment "EDITOR")]) "vi")]
+               ;; Preserve the previous support for literal executable paths containing spaces.
+               (if (.isFile (io/file selected))
+                 (validate-argv [selected])
+                 (split-command selected)))))))
 
 (defn begin! [definition]
   (m/attempt

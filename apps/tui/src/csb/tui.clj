@@ -1,5 +1,6 @@
 (ns csb.tui
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [csb.cli :as cli]
             [csb.editor :as editor]
             [csb.repl :as repl]
@@ -73,7 +74,8 @@
     :else
     (try
       ;; Resolve configuration while the screen is active, before creating a temporary.
-      (let [argv (cli/editor-argv)
+      ;; The settings editor command takes precedence over the environment.
+      (let [argv (cli/editor-argv (select-keys (:settings @state) [:editor-command]))
             started (editor/begin! (assoc (:definition @state) :source (:draft @state)))]
         (if (= :error (:status started))
           (editor-error! state (:error started) argv nil)
@@ -207,6 +209,59 @@
           (swap! state update :java-vm-editor assoc
                  :input (.getText widget) :caret (.getColumn (.getCaretPosition widget)) :error nil))))))
 
+(defn- convert-setting-text
+  ;; Text fields carry EDN data: parse what the schema expects and keep raw
+  ;; text so a failed save explains the value that did not validate.
+  [key text]
+  (cond
+    (= key [:repl :host]) (when-not (str/blank? text) text)
+    (= key [:repl :port]) (cond (str/blank? text) nil
+                                (parse-long text) (parse-long text)
+                                :else text)
+    (= key :editor-command) (try (edn/read-string text) (catch Exception _ text))
+    :else text))
+
+(defn- settings-key! [state ^KeyStroke key]
+  (let [editor (:settings-editor @state)
+        {:keys [field caret]} editor
+        field-def (nth view/setting-fields field)
+        key-path (:key field-def)
+        type (.getKeyType key)]
+    (cond
+      (= KeyType/Escape type) (session/close-settings! state)
+      (= KeyType/ArrowUp type)
+      (swap! state assoc-in [:settings-editor :field] (max 0 (dec field)))
+      (= KeyType/ArrowDown type)
+      (swap! state assoc-in [:settings-editor :field]
+             (min (dec (count view/setting-fields)) (inc field)))
+      (= KeyType/Tab type)
+      (session/set-settings-scope! state (if (= :project (:scope editor)) :global :project))
+      (= KeyType/Enter type) (session/apply-settings! state)
+      ;; Text fields take the remaining keys through the TextBox caret model.
+      (= :toggle (:kind field-def))
+      (when (= \space (.getCharacter key))
+        (session/set-setting! state key-path
+                              (not (get-in editor [:values key-path]))))
+      (= :choice (:kind field-def))
+      (when (#{KeyType/ArrowLeft KeyType/ArrowRight} type)
+        (let [choices (vec (:choices field-def))
+              current (get-in editor [:values key-path] (first choices))
+              idx (mod (+ (.indexOf ^java.util.List choices current)
+                          (if (= KeyType/ArrowRight type) 1 -1))
+                       (count choices))]
+          (session/set-setting! state key-path (nth choices idx))))
+      :else
+      (let [current (str (or (get-in editor [:values key-path]) ""))
+            widget (TextBox. ^String current TextBox$Style/SINGLE_LINE)]
+        (.setCaretPosition widget 0 (int (or caret (count current))))
+        (.handleKeyStroke widget key)
+        (let [text (.getText widget)
+              column (.getColumn (.getCaretPosition widget))]
+          (when-not (= text current)
+            (session/set-setting! state key-path (convert-setting-text key-path text)))
+          (swap! state assoc-in [:settings-editor :caret]
+                 (if (= text current) column (count text))))))))
+
 (defn- tests-key! [state ^KeyStroke key ^TerminalSize size]
   (let [s @state
         type (.getKeyType key)
@@ -292,14 +347,17 @@
         repl-open? (:repl-open? @state)
         tests-open? (get-in @state [:tests-view :open?])
         java-vm-open? (:java-vm-editor @state)
+        settings-open? (:settings-editor @state)
         search-open? (:search @state)
         eof? (= type KeyType/EOF)
-        quit? (and (not (or repl-open? tests-open? java-vm-open? search-open?)) (= ch \q))]
+        quit? (and (not (or repl-open? tests-open? java-vm-open? settings-open? search-open?))
+                   (= ch \q))]
     (when (and eof? (:dirty? @state)) (retain-draft! state))
     (if (or eof? (and quit? (not (:dirty? @state))))
       false
       (do
         (cond
+          settings-open? (when key (settings-key! state key))
           java-vm-open? (when key (java-vm-key! state key))
           repl-open? (when key (repl-key! state key size))
           tests-open? (when key (tests-key! state key size))
@@ -309,6 +367,7 @@
           quit? (swap! state assoc :status "Unsaved changes: s to Save or d to Discard, then q")
           (= type KeyType/F3) (when (:system @state) (swap! state assoc-in [:tests-view :open?] true))
           (= ch \j) (session/show-java-vms! state)
+          (= ch \g) (session/show-settings! state)
           (= type KeyType/Tab) (swap! state update :focus #(mod (inc (or % 0)) 3))
           (= type KeyType/ArrowRight) (swap! state update :focus #(mod (inc (or % 0)) 3))
           (= type KeyType/ArrowLeft) (swap! state update :focus #(mod (+ 2 (or % 0)) 3))

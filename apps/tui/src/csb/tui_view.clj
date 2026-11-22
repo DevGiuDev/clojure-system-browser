@@ -118,7 +118,7 @@
        "e: edit definition in $EDITOR (external editor)\ns / Ctrl+S: Save · d: Discard · r: Reload\n"
        "t: toggle dark/light theme\nx: example command · v: extension view\n"
        "o: source order (real file order of top-level forms)\n"
-       "p: nREPL panel · F3: Tests · j: Java VMs\n"
+       "p: nREPL panel · F3: Tests · j: Java VMs · g: Settings\n"
        "!: source diagnostics · q: quit · ?: help · Esc: source\nAfter an external edit, press s to save explicitly."))
 
 (defn- editor-error-text [{:keys [error argv temp]} width]
@@ -466,6 +466,50 @@
       (bar! g palette width (- height 2) status-tone :raised status))
     (bar! g palette width (dec height) :muted :background "↑↓: select · Enter: open · Esc: back")))
 
+(def setting-fields
+  "Editable rows of the settings panel, shared by the renderer and the key
+  handler. Text values are converted to EDN data by csb.tui before storing."
+  [{:key :theme :label "Theme (TUI)" :kind :choice :choices [:dark :light]}
+   {:key :namespace-tree? :label "Namespaces tree" :kind :toggle}
+   {:key :source-order? :label "Source order view" :kind :toggle}
+   {:key [:repl :host] :label "REPL host" :kind :text}
+   {:key [:repl :port] :label "REPL port" :kind :text}
+   {:key :editor-command :label "Editor command (EDN)" :kind :text}])
+
+(defn- settings-value-text [{:keys [key kind choices]} values]
+  (let [value (if (vector? key) (get-in values key) (get values key))]
+    (case kind
+      :toggle (str (boolean value))
+      :choice (name (or value (first choices)))
+      (if (vector? value) (pr-str value) (str (or value "(unset)"))))))
+
+(defn- settings-panel! [g palette width height {:keys [settings-editor status status-tone]}]
+  (let [{:keys [values origins scope field error]} settings-editor
+        origin-text (fn [{:keys [key]}]
+                      (name (or (get origins (if (vector? key) (first key) key)) :default)))]
+    (bar! g palette width 0 :accent :raised "Settings")
+    (bar! g palette width 1 :muted :background
+          (str "Effective settings · Save to: " (if (= :project scope) "This project" "Global")
+               " · Tab: switch scope"))
+    (doseq [[i {:keys [label] :as f}] (map-indexed vector setting-fields)
+            :let [y (+ 3 i)
+                  selected? (= field i)]]
+      (bar! g palette width y
+            (if selected? :selected-text :text) (if selected? :selection :surface)
+            (str (if selected? "> " "  ") label " = "
+                 (settings-value-text f values)
+                 " · " (origin-text f))))
+    (when error
+      (style! g palette :error :background)
+      (let [lines (TerminalTextUtils/getWordWrappedText
+                   (max 1 (- width 2)) (into-array String [error]))]
+        (doseq [[i line] (map-indexed vector (take (- height 9) lines))]
+          (bar! g palette width (+ 4 (count setting-fields) i) :error :background line))))
+    (when (#{:warning :error} status-tone)
+      (bar! g palette width (- height 2) status-tone :raised status))
+    (bar! g palette width (dec height) :muted :background
+          "↑↓: field · Space/←→: edit value · Enter: save · Esc: close")))
+
 (defn draw! [^TerminalScreen screen state full?]
   (let [size (.getTerminalSize screen)
         width (.getColumns size) height (.getRows size)
@@ -482,9 +526,11 @@
       (or (< width 60) (< height 16))
       (do (text! g width 0 0 "Resize terminal to at least 60 × 16")
           (when (> height 1) (text! g width 0 1 (if (or (:java-vm-editor state) (:repl-open? state)
+                                                       (:settings-editor state)
                                                        (get-in state [:tests-view :open?]) (:search state))
                                                 "Esc: back" "q: quit · t: theme"))))
       (:java-vm-editor state) (java-vm-panel! screen g palette width height (:java-vm-editor state))
+      (:settings-editor state) (settings-panel! g palette width height state)
       (:repl-open? state) (if (:inspection-open? state)
                             (inspection-panel! g palette width height state)
                             (repl-panel! screen g palette width height state))
@@ -506,7 +552,7 @@
                     (:dirty? state) :warning :else :text)
               :raised status)
         (bar! g palette width (dec height) :muted :background
-              "q: quit · ?: help · F3: Tests · j: Java VMs · p: REPL · !: errors · o: order · Tab: focus · e: edit · s: Save · t: theme")))
+              "q: quit · ?: help · F3: Tests · j: Java VMs · g: Settings · p: REPL · !: errors · o: order · Tab: focus · e: edit · s: Save · t: theme")))
     ;; A full repaint is necessary when the physical terminal has been reset.
     ;; Otherwise even large changes (such as themes) can be sent without an erase.
     (.refresh screen (if full? Screen$RefreshType/COMPLETE Screen$RefreshType/DELTA))))

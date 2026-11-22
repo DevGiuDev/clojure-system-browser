@@ -296,15 +296,18 @@
 (defn show-panel! [state]
   (let [{:keys [system repl]} @state
         root (some-> system service/project-info :root)
+        {:keys [host port]} (get-in @state [:settings :repl] {})
         changed-project? (not= root (:port-project repl))
         detect? (or changed-project?
                     (and (nil? (:connection repl)) (not (:port-overridden? repl))
                          (= default-host (get repl :host default-host))))
-        port (when detect? (str (read-project-port root)))]
+        ;; The project's .nrepl-port wins; the settings port is the fallback.
+        port (when detect? (str (or (read-project-port root) port)))]
     (swap! state (fn [s]
                    (cond-> (assoc s :repl-open? true)
                      detect? (update :repl assoc :port-project root :port port :port-overridden? false)
-                     changed-project? (update :repl dissoc :host))))))
+                     changed-project? (update :repl #(if host (assoc % :host host)
+                                                        (dissoc % :host))))))))
 
 (defn edit-port [panel text]
   (if (= (or (:port panel) "") text)

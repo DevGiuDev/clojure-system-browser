@@ -8,6 +8,7 @@
             [cljfx.lifecycle :as lifecycle]
             [cljfx.mutator :as mutator]
             [cljfx.prop :as prop]
+            [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
             [csb.cli :as cli]
@@ -367,6 +368,92 @@
                         :text "Enter opens · ↑ ↓ navigates · Esc closes"}
                        (button "Close" (:close-search actions) false)]}]))}]}))
 
+(defn- settings-row [label editor origin]
+  {:fx/type :h-box :spacing 8 :alignment :center-left
+   :children [{:fx/type :label :text label :min-width 172 :wrap-text true
+               :style-class ["label" "settings-name"]}
+              editor
+              {:fx/type :label :style-class ["label" "secondary-text" "settings-origin"]
+               :text (str (name (or origin :default)))}]})
+
+(defn- settings-rows [values origins actions]
+  (let [origin (fn [key] (get origins (if (vector? key) (first key) key)))
+        row (fn [key label editor] (settings-row label editor (origin key)))]
+    [(row :theme "Theme (TUI)"
+          {:fx/type :combo-box :id "settings-theme" :items [:dark :light]
+           :max-width Double/MAX_VALUE :value (get values :theme :dark)
+           :on-value-changed #((:set-setting actions) :theme %)})
+     (row :namespace-tree? "Namespaces tree"
+          {:fx/type :check-box :id "settings-namespace-tree"
+           :selected (boolean (:namespace-tree? values))
+           :on-selected-changed #((:set-setting actions) :namespace-tree? %)})
+     (row :source-order? "Source order view"
+          {:fx/type :check-box :id "settings-source-order"
+           :selected (boolean (:source-order? values))
+           :on-selected-changed #((:set-setting actions) :source-order? %)})
+     (row [:repl :host] "REPL host"
+          {:fx/type :text-field :id "settings-repl-host" :h-box/hgrow :always
+           :prompt-text repl/default-host
+           :text (or (get-in values [:repl :host]) "")
+           :on-text-changed (fn [t]
+                              ((:set-setting actions) [:repl :host]
+                               (when-not (str/blank? t) t)))})
+     (row [:repl :port] "REPL port"
+          {:fx/type :text-field :id "settings-repl-port" :h-box/hgrow :always
+           :prompt-text "1–65535"
+           :text (str (or (get-in values [:repl :port]) ""))
+           :on-text-changed (fn [t]
+                              ((:set-setting actions) [:repl :port]
+                               (cond (str/blank? t) nil
+                                     (parse-long t) (parse-long t)
+                                     :else t)))})
+     (row :editor-command "Editor command"
+          {:fx/type :text-field :id "settings-editor-command" :h-box/hgrow :always
+           :prompt-text "EDN argv, e.g. [\"emacsclient\" \"-c\"]"
+           :text (let [command (:editor-command values)]
+                   (if (vector? command) (pr-str command) (str (or command ""))))
+           :on-text-changed (fn [t]
+                              ((:set-setting actions) :editor-command
+                               (try (edn/read-string t)
+                                 (catch Exception _ t))))})]))
+
+(defn- settings-overlay
+  "Centered settings panel over the workspace: one row per setting with its
+   origin (default/global/project), a save scope and Esc or a scrim click to
+   close."
+  [{:keys [settings-editor busy?]} actions]
+  (let [{:keys [values origins scope error]} settings-editor
+        rows (settings-rows values origins actions)]
+    {:fx/type :stack-pane :style-class ["search-scrim" "settings-scrim"]
+     :on-mouse-pressed (fn [_] ((:close-settings actions)))
+     :children
+     [{:fx/type :v-box :style-class ["search-overlay" "settings-overlay" "desktop"]
+       :spacing 8
+       :on-mouse-pressed (fn [^MouseEvent e] (.consume e))
+       :children
+       (cond-> (into [(heading "Settings" :gear)
+                      {:fx/type :label :style-class ["label" "secondary-text"]
+                       :wrap-text true
+                       :text "Effective settings. Save them globally or override this project."}]
+                     rows)
+                true (conj {:fx/type :h-box :spacing 8 :alignment :center-left
+                            :children
+                            [{:fx/type :label :text "Save to" :min-width 172}
+                             {:fx/type :combo-box :id "settings-scope"
+                              :items ["Global" "This project"]
+                              :max-width Double/MAX_VALUE
+                              :value (if (= :project scope) "This project" "Global")
+                              :on-value-changed
+                              (fn [v]
+                                ((:set-settings-scope actions)
+                                 (if (= v "This project") :project :global)))}]})
+                error (conj (status-label "settings-error" error :error :error))
+                true (conj {:fx/type :h-box :spacing 8
+                            :children
+                            [(button "Save settings" (:save-settings actions)
+                                     (boolean busy?) {:primary? true})
+                             (button "Close" (:close-settings actions) false)]}))}]}))
+
 (defn- automatic-usages [{:keys [system definition category source-order? tests-view symbol-results usage-selection]}]
   (when (and system definition (not= :requires category)
              (not (or source-order? (:open? tests-view) symbol-results)))
@@ -541,6 +628,8 @@
                            {:icon :tests :active? (get-in state [:tests-view :open?])})
                    (button "Java VMs…" (:show-java-vms actions) (or busy? (nil? system) (:java-vm-editor state))
                            {:active? (:java-vm-editor state)})
+                   (button "Settings" (:open-settings actions) (or busy? (nil? system) (:settings-editor state))
+                           {:icon :gear :active? (:settings-editor state)})
                    (button "REPL" (:toggle-repl actions) busy? {:icon :terminal :active? (:repl-open? state)})]}]
       (map (fn [{:keys [title kind id]}]
              (button title #((:extension actions) kind id) busy?)))
@@ -589,6 +678,8 @@
                           (do (.consume e) ((:open-search actions)))
                           (and (:search state) (= KeyCode/ESCAPE (.getCode e)))
                           (do (.consume e) ((:close-search actions)))
+                          (and (:settings-editor state) (= KeyCode/ESCAPE (.getCode e)))
+                          (do (.consume e) ((:close-settings actions)))
                           (and (.isShortcutDown e) (= KeyCode/S (.getCode e)))
                           (do (.consume e) ((:save actions)))
                           (and (:java-vm-editor state) (= KeyCode/ESCAPE (.getCode e)))
@@ -678,9 +769,14 @@
                             symbol-results (assoc :right (symbol-panel state actions symbol-results)))]
                           (:repl-open? state) (conj (repl-panel state actions))))}
                      :bottom (status-bar state)}]
-        (if (:search state)
+        (cond
+          (:search state)
           {:fx/type :stack-pane :children [desktop (search-overlay state actions)]}
-          desktop))}}))
+
+          (:settings-editor state)
+          {:fx/type :stack-pane :children [desktop (settings-overlay state actions)]}
+
+          :else desktop))}}))
 
 (defn- choose-project []
   (some-> (.showDialog (doto (DirectoryChooser.) (.setTitle "Open Clojure project")) nil)
@@ -796,6 +892,11 @@
       :edit-java-home #(session/set-java-home-input! state %)
       :apply-java-vm #(submit (fn [] (session/apply-java-vm! state)))
       :close-java-vms #(when-not (:busy? @state) (swap! state dissoc :java-vm-editor))
+      :open-settings #(session/show-settings! state)
+      :close-settings #(session/close-settings! state)
+      :set-setting (fn [key value] (session/set-setting! state key value))
+      :set-settings-scope #(session/set-settings-scope! state %)
+      :save-settings #(submit (fn [] (session/apply-settings! state)))
       :test-namespace #(tests/select-namespace! state %)
       :test-definition #(tests/select-test! state %)
       :run-tests #(tests/run! state %1 %2)
