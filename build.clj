@@ -22,7 +22,8 @@
    Includes the core, the TUI and the nREPL client."
   [_]
   (let [v (read-version)]
-    (b/copy-dir {:src-dirs ["src" "apps/tui/src" "apps/live/src"] :target-dir class-dir})
+    (b/copy-dir {:src-dirs ["src" "apps/tui/src" "apps/live/src" "extensions/test-runner/src"]
+                 :target-dir class-dir})
     (b/compile-clj {:basis basis :class-dir class-dir :ns-compile [main]})
     (b/uber {:basis basis :class-dir class-dir :main main
              :uber-file (str "target/clojure-system-browser-" v ".jar")})))

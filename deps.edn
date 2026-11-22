@@ -4,10 +4,10 @@
  :aliases
  {:test {:extra-paths ["test"] :main-opts ["-m" "csb.test-runner"]}
   :cli {:main-opts ["-m" "csb.cli"]}
-  :live-test {:extra-paths ["apps/live/src" "test-live"]
+  :live-test {:extra-paths ["apps/live/src" "extensions/test-runner/src" "test-live"]
               :extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}}
               :main-opts ["-m" "csb.repl-test"]}
-  :desktop {:extra-paths ["apps/desktop/src" "apps/live/src"]
+  :desktop {:extra-paths ["apps/desktop/src" "apps/live/src" "extensions/test-runner/src"]
             :extra-deps {cljfx/cljfx {:mvn/version "1.10.363"}
                          nrepl/nrepl {:mvn/version "1.7.0"}
                          org.fxmisc.richtext/richtextfx {:mvn/version "0.11.7"}
@@ -23,7 +23,7 @@
                  :jvm-opts ["-Dglass.platform=Headless" "-Dprism.order=sw"
                             "-Djavafx.cachedir=.cache/javafx"]
                  :main-opts ["-m" "csb.desktop-smoke"]}
-  :tui {:extra-paths ["apps/tui/src" "apps/live/src"]
+  :tui {:extra-paths ["apps/tui/src" "apps/live/src" "extensions/test-runner/src"]
         :extra-deps {com.googlecode.lanterna/lanterna {:mvn/version "3.1.5"}
                      nrepl/nrepl {:mvn/version "1.7.0"}}
         :main-opts ["-m" "csb.tui"]}

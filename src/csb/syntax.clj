@@ -1,6 +1,7 @@
 (ns csb.syntax
   "Lexical colours for display only. Never reads, resolves or evaluates source."
-  (:require [clojure.string :as str]))
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]))
 
 (def ^:private special-forms
   #{"ns" "in-ns" "def" "defonce" "defn" "defn-" "defmacro" "defmulti"
@@ -42,3 +43,15 @@
         (recur (conj result {:start (.start matcher) :end (.end matcher)
                             :kind (kind (.group matcher))}))
         result))))
+
+(defn symbol-at
+  "Return the symbol at a UTF-16 `offset`, also accepting the token end at a caret."
+  [text offset caret?]
+  (some (fn [{:keys [start end kind]}]
+          (when (and (#{:plain :special} kind)
+                     (or (<= start offset (dec end)) (and caret? (= end offset))))
+            (try
+              (let [value (edn/read-string (subs text start end))]
+                (when (symbol? value) value))
+              (catch RuntimeException _ nil))))
+        (spans text)))

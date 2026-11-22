@@ -10,7 +10,11 @@ clients share the runtime adapter. See [ADR 013](decisions/013-local-repl-panel.
 Milestone 5 now also covers configurable hosts, runtime namespace and var
 exploration, basic metadata, and conservative Live and Combined views in both
 clients. See [ADR 014](decisions/014-runtime-inspection.md) and
-[verification](verification.md). The Test Runner follows in milestone 6.
+[verification](verification.md). Milestone 6 adds the **Tests** view,
+background suite and scoped execution, streamed output and indicators
+per namespace and test in both clients. See [ADR 016](decisions/016-test-runner.md).
+Both clients can select an installed JDK per project for the Test Runner.
+See [ADR 017](decisions/017-project-java-vms.md).
 The Source World manual acceptance matrix remains tracked separately.
 
 ## Recorded progress — 2026-11-21
@@ -80,7 +84,7 @@ checks** and clean lint. See [verification](verification.md) and
 | 3: TUI | Dark/light themes with `t`, lexical highlighting shared with Desktop, contrast and change-driven refresh; virtual terminal and 40 checks with pseudoterminal/real Vim; Save/Ctrl+S, conflicts, permissions and terminal restoration | Full manual interaction, highlighting inside Emacs/EXWM and per-platform behavior |
 | 4: polish/extension | Registry v1, command, view and documentation | Validation of both clients and system matrix |
 | 5: Live World | nREPL connection, evaluation, runtime inspection and Live/Combined views | Manual verification on supported platforms |
-| 6: Test Runner | Not implemented | Next feature |
+| 6: Test Runner | Project command discovery, background suite and scoped runs, streamed results and per-test indicators | Rerunning a set of failures and manual UI validation |
 
 ## Source World acceptance record
 

@@ -1,11 +1,13 @@
 (ns csb.tui-view
   "Terminal presentation with explicit colours, independent of the shell theme."
   (:require [clojure.string :as str]
+            [csb.java-vm :as java-vm]
             [csb.repl :as repl]
             [csb.runtime-inspection :as inspection]
             [csb.service :as service]
             [csb.session :as session]
-            [csb.syntax :as syntax])
+            [csb.syntax :as syntax]
+            [csb.tests :as tests])
   (:import [com.googlecode.lanterna TerminalPosition TerminalSize TerminalTextUtils TextColor$Indexed]
            [com.googlecode.lanterna.graphics TextGraphics]
            [com.googlecode.lanterna.screen TerminalScreen Screen$RefreshType]))
@@ -15,11 +17,13 @@
   {:dark {:background 234 :surface 235 :raised 237 :text 253 :muted 248
           :accent 81 :selection 24 :selected-text 231 :border 240 :warning 221 :error 210
           :special 81 :keyword 183 :string 150 :comment 246 :number 215
-          :literal 209 :character 150 :delimiter 248 :reader 180}
+          :literal 209 :character 150 :delimiter 248 :reader 180
+          :test-idle 248 :test-passed 114 :test-failed 210 :test-running 215}
    :light {:background 255 :surface 254 :raised 253 :text 234 :muted 240
            :accent 24 :selection 24 :selected-text 231 :border 245 :warning 58 :error 124
            :special 24 :keyword 90 :string 22 :comment 240 :number 94
-           :literal 124 :character 22 :delimiter 240 :reader 94}})
+           :literal 124 :character 22 :delimiter 240 :reader 94
+           :test-idle 240 :test-passed 28 :test-failed 124 :test-running 130}})
 
 (defn- colours [state]
   (into {} (map (fn [[k index]] [k (TextColor$Indexed. index)]))
@@ -46,7 +50,19 @@
   (rectangle! g 0 y width 1)
   (text! g width 1 y text))
 
-(defn- lists! [g palette width rows state]
+(defn- test-led! [g palette right x y background status]
+  (let [kind (case status
+               :passed :test-passed
+               (:failed :error) :test-failed
+               :running :test-running
+               :test-idle)
+        palette (if (= background :selection)
+                  (assoc palette kind (TextColor$Indexed. (get-in themes [:dark kind])))
+                  palette)]
+    (style! g palette kind background)
+    (text! g right x y "●")))
+
+(defn- lists! [g palette width rows state tree]
   (let [focus (get state :focus 0)
         cats (session/categories state)
         values [(vec (session/namespaces state)) (:entries cats)
@@ -76,17 +92,21 @@
                     (when focused? " ]")))
         (doseq [[i item] (map-indexed vector (take rows (drop start items)))]
           (let [selected? (= (item-id item) (nth selected c))
-                y (+ 4 i)]
-            (style! g palette (if (and selected? focused?) :selected-text :text)
-                    (cond (and selected? focused?) :selection selected? :raised :else :surface))
+                y (+ 4 i)
+                background (cond (and selected? focused?) :selection selected? :raised :else :surface)
+                foreground (if (and selected? focused?) :selected-text :text)
+                led? (and (zero? c) (contains? tree item))]
+            (style! g palette foreground background)
             (rectangle! g x y (- right x) 1)
             (text! g right (inc x) y
-                   (str (if selected? "> " "  ")
-                        (cond (= c 2) (str (:name item) (when-not (:writable? item) " [RO]"))
-                              (= c 1) (if (:category item)
-                                        (str (name (:category item)) " · " (:count item))
-                                        "(all)")
-                              :else item)))))
+                   (if selected? ">" " "))
+            (when led?
+              (test-led! g palette right (+ x 3) y background (tests/namespace-status state item (get tree item)))
+              (style! g palette foreground background))
+            (text! g right (+ x (if led? 5 3)) y
+                   (cond (= c 2) (str (:name item) (when-not (:writable? item) " [RO]"))
+                         (= c 1) (session/category-label item)
+                         :else item))))
         (when (pos? c)
           (style! g palette :border :background)
           (.drawLine ^TextGraphics g (dec x) 3 (dec x) (+ 3 rows) \│))))))
@@ -96,7 +116,7 @@
        "e: edit definition in $EDITOR (external editor)\ns / Ctrl+S: Save · d: Discard · r: Reload\n"
        "t: toggle dark/light theme\nx: example command · v: extension view\n"
        "o: source order (real file order of top-level forms)\n"
-       "p: nREPL panel\n"
+       "p: nREPL panel · F3: Tests · j: Java VMs\n"
        "!: source diagnostics · q: quit · ?: help · Esc: source\nAfter an external edit, press s to save explicitly."))
 
 (defn- editor-error-text [{:keys [error argv temp]} width]
@@ -142,6 +162,10 @@
           "No source forms"))
       "No project open")
     (:editor-error state) (editor-error-text (:editor-error state) width)
+    (= :requires (:category state))
+    (str/join "\n"
+              (TerminalTextUtils/getWordWrappedText
+               (- width 3) (into-array String (str/split-lines (session/requires-text state)))))
     :else (:draft state)))
 
 (defn- code-lines [text]
@@ -173,6 +197,7 @@
         title (cond (:help? state) "Help" (:diagnostics? state) "Source diagnostics"
                     (:source-order? state) "Source order · Esc: source"
                     (:editor-error state) "External editor failed · Esc: source"
+                    (= :requires (:category state)) "Requires · read only"
                     :else (or (get-in state [:definition :name]) "Source"))]
     (bar! g palette width (dec top)
           (cond (:editor-error state) :error (:dirty? state) :warning :else :accent) :raised
@@ -196,7 +221,7 @@
   (vec (TerminalTextUtils/getWordWrappedText
         (max 1 (- width 3)) (into-array String (str/split-lines (repl/transcript panel))))))
 
-(defn- repl-input! [^TerminalScreen screen g palette width x y rows text [row column]]
+(defn- input! [^TerminalScreen screen g palette width x y rows text [row column]]
   (let [lines (str/split (or text "") #"\n" -1)
         row (min (or row 0) (dec (count lines)))
         line (nth lines row)
@@ -231,7 +256,7 @@
       connected?
       (do
         (bar! g palette width (- height 8) :accent :raised "Clojure expression · Enter: newline")
-        (repl-input! screen g palette width 1 (- height 7) 4 input (get-in state [:repl-caret :input])))
+        (input! screen g palette width 1 (- height 7) 4 input (get-in state [:repl-caret :input])))
       disconnected?
       (let [focus (get state :repl-address-field :port)
             other (if (= :host focus) :port :host)]
@@ -239,8 +264,8 @@
                 :let [host? (= :host field)
                       y (- height (if host? 6 7))]]
           (bar! g palette width y (if (= field focus) :accent :muted) :surface (if host? "Host:" "Port:"))
-          (repl-input! screen g palette width 7 y 1 (if host? host port)
-                       (get-in state [:repl-caret field])))))
+          (input! screen g palette width 7 y 1 (if host? host port)
+                  (get-in state [:repl-caret field])))))
     (bar! g palette width (- height 2) :text :background
           (if connected?
             "F5: evaluate · F6: evaluate definition · F7: interrupt"
@@ -285,13 +310,99 @@
     (bar! g palette width (dec height) :muted :background
           "F4: console · F5: refresh · F7: interrupt · F8: disconnect")))
 
+(defn- test-list! [g palette left right rows title items selected label status focused?]
+  (let [idx (.indexOf ^java.util.List (vec items) selected)
+        start (max 0 (- idx (dec rows)))]
+    (style! g palette (if focused? :accent :muted) :raised)
+    (rectangle! g left 2 (- right left) 1)
+    (text! g right (inc left) 2 (if focused? (str "[ " title " ]") title))
+    (doseq [[row item] (map-indexed vector (take rows (drop start items)))]
+      (let [y (+ 3 row)
+            current? (= selected item)
+            bg (cond (and current? focused?) :selection current? :raised :else :surface)
+            fg (if (and current? focused?) :selected-text :text)]
+        (style! g palette fg bg)
+        (rectangle! g left y (- right left) 1)
+        (text! g right (inc left) y (if current? ">" " "))
+        (when status
+          (test-led! g palette right (+ left 3) y bg (status item))
+          (style! g palette fg bg))
+        (text! g right (+ left (if status 5 3)) y (label item))))))
+
+(defn- test-list-rows [height] (max 2 (quot (- height 9) 2)))
+
+(defn test-detail-page-size [height] (max 1 (- height (test-list-rows height) 8)))
+
+(defn test-detail-lines [width result]
+  (vec (TerminalTextUtils/getWordWrappedText
+        (max 1 (- width 2))
+        (into-array String (mapcat #(str/split (str/replace % "\r" "") #"\n" -1)
+                                  (:output result))))))
+
+(defn- tests-panel! [g palette width height state tree]
+  (let [rows (test-list-rows height)
+        mid (quot width 2)
+        ns-sym (tests/selected-namespace state tree)
+        definitions (get tree ns-sym)
+        selected (tests/selected-test state definitions)
+        test-focus? (get-in state [:tests-view :test-focus?])
+        result (tests/result state)
+        summary-y (+ 4 rows)
+        page (test-detail-page-size height)
+        lines (test-detail-lines width result)
+        start (max 0 (- (count lines) page (get-in state [:tests-view :detail-scroll] 0)))]
+    (bar! g palette width 0 :accent :raised "CLOJURE SYSTEM BROWSER · Tests")
+    (test-list! g palette 0 mid rows "Test namespaces" (sort-by str (keys tree))
+                ns-sym str #(tests/namespace-status state % (get tree %)) (not test-focus?))
+    (test-list! g palette mid width rows "Tests" definitions
+                selected (comp str :name) #(tests/case-status state ns-sym (:name %)) test-focus?)
+    (bar! g palette width summary-y :text :raised
+          (tests/result-label result))
+    (style! g palette :text :background)
+    (doseq [[row line] (map-indexed vector (take page (drop start lines)))]
+      (text! g width 1 (+ summary-y row 1) line))
+    (when (:dirty? state)
+      (bar! g palette width (- height 3) :warning :background
+            "Unsaved changes · Save or Discard before opening test source"))
+    (bar! g palette width (- height 2) :text :background
+          "F4: suite · F5: namespace · F6: test · F7: stop · j: Java VMs")
+    (bar! g palette width (dec height) :muted :background
+          "Tab: focus · ↑↓: select · PgUp/PgDn: details · Enter: source · Esc: back")))
+
+(defn- java-vm-panel! [^TerminalScreen screen g palette width height
+                       {:keys [input caret error installed choice-index]}]
+  (bar! g palette width 0 :accent :raised "Java VMs")
+  (bar! g palette width 2 :text :background "JDK directory for project commands")
+  (input! screen g palette width 1 3 1 input [0 (or caret (count input))])
+  (if (some? choice-index)
+    (let [rows (- height 7)
+          start (max 0 (- (inc choice-index) rows))]
+      (.setCursorPosition screen nil)
+      (bar! g palette width 5 :accent :raised "Installed Java VMs · ↑↓: select · Enter: use · Esc: back")
+      (doseq [[row vm] (map-indexed vector (take rows (drop start installed)))]
+        (let [selected? (= choice-index (+ start row))]
+          (bar! g palette width (+ 6 row)
+                (if selected? :selected-text :text) (if selected? :selection :surface)
+                (str (if selected? "> " "  ") (java-vm/label vm))))))
+    (do
+      (bar! g palette width 5 :muted :background "Leave blank to inherit the launcher environment")
+      (bar! g palette width 6 :text :background "Enter: apply · Esc: cancel")
+      (bar! g palette width 7 :muted :background
+            (if (seq installed) "Tab: installed Java VMs" "No Java VMs detected"))
+      (when error
+        (style! g palette :error :background)
+        (let [lines (TerminalTextUtils/getWordWrappedText (max 1 (- width 2)) (into-array String [error]))]
+          (doseq [[i line] (map-indexed vector (take (- height 9) lines))]
+            (text! g width 1 (+ i 9) line)))))))
+
 (defn draw! [^TerminalScreen screen state full?]
   (let [size (.getTerminalSize screen)
         width (.getColumns size) height (.getRows size)
         g (.newTextGraphics screen)
         palette (colours state)
         rows (list-rows height)
-        status (:status state)]
+        status (:status state)
+        tree (tests/targets state)]
     ;; Paint only the back buffer. Screen.clear requests a full terminal erase.
     (style! g palette :text :background)
     (.fill g \space)
@@ -299,18 +410,23 @@
     (cond
       (or (< width 60) (< height 16))
       (do (text! g width 0 0 "Resize terminal to at least 60 × 16")
-          (when (> height 1) (text! g width 0 1 (if (:repl-open? state) "Esc: source" "q: quit · t: theme"))))
+          (when (> height 1) (text! g width 0 1 (if (or (:java-vm-editor state) (:repl-open? state)
+                                                       (get-in state [:tests-view :open?]))
+                                                "Esc: back" "q: quit · t: theme"))))
+      (:java-vm-editor state) (java-vm-panel! screen g palette width height (:java-vm-editor state))
       (:repl-open? state) (if (:inspection-open? state)
                             (inspection-panel! g palette width height state)
                             (repl-panel! screen g palette width height state))
+      (get-in state [:tests-view :open?]) (tests-panel! g palette width height state tree)
       :else
       (do
         (bar! g palette width 0 :accent :raised "CLOJURE SYSTEM BROWSER · Source World")
         (style! g palette :muted :background)
         (text! g width 1 1 (str (or (:namespace state) "No project open")
-                                     " / " (or (:category state) "—")
+                                     " / " (case (:category state) :requires "(requires)"
+                                                 (or (:category state) "—"))
                                      "    Theme: " (name (get state :theme :dark)) " · t to change"))
-        (lists! g palette width rows state)
+        (lists! g palette width rows state tree)
         (source! g palette width height rows state)
         (bar! g palette width (- height 2)
               (cond (:editor-error state) :error
@@ -318,7 +434,7 @@
                     (:dirty? state) :warning :else :text)
               :raised status)
         (bar! g palette width (dec height) :muted :background
-              "q: quit · ?: help · p: REPL · !: errors · o: order · Tab: focus · ↑↓: select · e: edit · s: Save · t: theme")))
+              "q: quit · ?: help · F3: Tests · j: Java VMs · p: REPL · !: errors · o: order · Tab: focus · e: edit · s: Save · t: theme")))
     ;; A full repaint is necessary when the physical terminal has been reset.
     ;; Otherwise even large changes (such as themes) can be sent without an erase.
     (.refresh screen (if full? Screen$RefreshType/COMPLETE Screen$RefreshType/DELTA))))

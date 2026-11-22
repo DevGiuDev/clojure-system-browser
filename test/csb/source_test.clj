@@ -1,5 +1,6 @@
 (ns csb.source-test
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is]]
             [csb.editor :as editor]
             [csb.service :as service]
             [csb.source :as source])
@@ -44,6 +45,25 @@
         (is (= :private-functions (:category (some #(when (= 'secret (:name %)) %) defs))))
         (is (= "(defn first-one [x] x)" (:source (some #(when (= 'first-one (:name %)) %) defs))))
         (is (= :unsupported (get-in (service/list-namespaces system {:world :live}) [:error :type])))))))
+
+(deftest symbol-lookup-in-indexed-definitions
+  (with-project
+    {"src/cart.clj" "(ns cart)\n(defn total [] 1)\n(defn receipt [] (total))"
+     "src/pay.clj" "(ns pay (:require [cart :as c :refer [total]]))
+                  (defn pay [] [(c/total) (total)])
+                  (defn ignored [] [\"c/total\" 'c/total #_(c/total) :c/total])"
+     "src/other.clj" "(ns other)\n(defn total [] 0)\n(defn unrelated [] (total))"
+     "test/cart_test.clj" "(ns cart-test (:require [cart :as c]))\n(deftest check-total (c/total))"}
+    (fn [root]
+      (let [system (opened root)
+            context (first (:value (service/list-definitions system 'pay)))
+            names-for (fn [action sym]
+                        (mapv :name (get-in (service/lookup-symbol system (:id context) sym action)
+                                           [:value :matches])))]
+        (is (= ['total] (names-for :definition 'c/total)))
+        (is (= ['check-total] (names-for :tests 'total)))
+        (is (= ['receipt 'check-total 'pay] (names-for :usages 'cart/total)))
+        (is (empty? (names-for :definition 'missing)))))))
 
 (deftest browse-does-not-evaluate-reader-forms-or-project-code
   (with-project {"src/demo.clj" "(ns demo)\n#=(throw (Exception. \"MUST NOT RUN\"))\n(throw (Exception. \"MUST NOT RUN\"))\n(defn f [] 1)"}
@@ -137,6 +157,16 @@
       (is (= ['demo] (:value (service/list-namespaces (opened root)))))))
   (with-project {"deps.edn" "{:paths [\"../outside\"]}"}
     (fn [root] (is (= :unsupported (get-in (service/open-project root) [:error :type]))))))
+
+(deftest test-alias-paths-are-indexed-without-running-the-alias
+  (with-project
+    {"deps.edn" "{:paths [\"src\"] :aliases {:test {:extra-paths [\"spec/jvm\"] :main-opts [\"-m\" \"never.run\"]}}}"
+     "src/demo.clj" "(ns demo) (defn f [] 1)"
+     "spec/jvm/demo_test.clj" "(ns demo-test (:require [clojure.test :refer [deftest]])) (deftest check-f)"}
+    (fn [root]
+      (is (= ['check-f] (mapv :name (get (:value (service/list-tests (opened root))) 'demo-test))))
+      (let [system (:value (service/open-project root {:roots ["src"]}))]
+        (is (empty? (:value (service/list-tests system))))))))
 
 (deftest polylith-workspace-is-discovered-by-convention
   (with-project
@@ -356,6 +386,28 @@
                facets))
         (is (= :unsupported
                (get-in (service/list-categories system 'demo {:world :live}) [:error :type])))))))
+
+(deftest indexed-requires-preserve-declarations-per-file
+  (let [require-clause "(:require plain [missing.lib :as l :refer [f]] (my.prefix [a :as a] b))"
+        conditional-clause "#?@(:clj [(:require [jvm.lib :as j])] :cljs [(:require-macros [macros.lib :as m])])"
+        macros-clause "#?(:cljs (:require-macros [macros.extra :as m]))"
+        dart-clause "(:require [\"dart:io\" :as io])"]
+    (with-project {"src/a.cljc" (str "(ns demo #_(:require ignored) (:import java.io.File) "
+                                    require-clause "\n" conditional-clause "\n" macros-clause ")")
+                   "src/b.cljd" (str "(ns demo " dart-clause ")")
+                   "src/c.clj" "(ns other (:require unrelated))"
+                   "src/d.clj" "(ns empty)"
+                   "src/e.cljc" "(ns feature (:require #?(:clj jvm.lib :cljs js.lib)))"}
+      (fn [root]
+        (let [system (:value (service/open-project root))]
+          (is (= [["a.cljc" [require-clause conditional-clause macros-clause]]
+                  ["b.cljd" [dart-clause]]]
+                 (mapv (fn [{:keys [file declarations]}]
+                         [(last (str/split file #"/")) declarations])
+                       (:value (service/list-requires system 'demo)))))
+          (is (= ["(:require #?(:clj jvm.lib :cljs js.lib))"]
+                 (-> (service/list-requires system 'feature) :value first :declarations)))
+          (is (= [] (:value (service/list-requires system 'empty)))))))))
 
 (deftest source-forms-show-real-file-order
   (with-project

@@ -17,9 +17,13 @@ The main goal was to validate an idea and get a working MVP as fast as possible.
   sessions, a CLI and a minimal extension
   registry. Saving is limited to unambiguous `defn`/`defn-` forms in `.clj` files,
   preserving surrounding bytes, detecting conflicts and retaining drafts on error.
+- Select **(requires)** under **Categories** in Desktop or TUI to read the
+  current namespace's `:require` and `:require-macros` declarations, including
+  aliases, options and reader conditionals.
 - Desktop (`cljfx`/JavaFX): project opening, navigation, filtering, a code editor
-  with syntax highlighting, selection, undo/redo and Save/Discard/Reload. Tested
-  with real controls using the JavaFX 27 headless backend.
+  with syntax highlighting, selection, undo/redo and Save/Discard/Reload.
+  Context menus in the editor and **Definitions** open a definition or find
+  symbol uses and related tests. Tested with real JavaFX 27 headless controls.
 - TUI (Lanterna): navigation, resizing, dark/light themes, syntax highlighting
   shared with Desktop, updates only when something changes, external editing,
   Save/Ctrl+S and draft recovery. Tested with a virtual terminal and real Vim in
@@ -36,6 +40,9 @@ The main goal was to validate an idea and get a working MVP as fast as possible.
   definitions separately from Save, and browse loaded namespaces, vars and metadata.
   The Combined view compares names in the runtime and the project's source index.
   See [REPL walkthrough](#repl-walkthrough) and [verification](docs/verification.md).
+- The SUnit-inspired **Tests** view runs the project's test command in a
+  background process. Both clients stream output and show the result beside
+  each test and namespace. See [Test Runner](#test-runner).
 - The MVP **is not considered complete** until the full interaction workflow has
   been demonstrated in both clients on supported systems.
   See the [roadmap](docs/roadmap.md).
@@ -115,9 +122,11 @@ If the launch cache also needs rebuilding when opening a project, place
 `-Sforce` before `-M:tui`. Do not change the `deps.edn` of the project you want
 to browse.
 
-Source roots come from `:paths` in the project's `deps.edn`, without resolving
-its dependencies or executing aliases. If no paths are provided, `src` and
-`test` are used. To include paths declared only in an alias, repeat `--source-root`:
+Source roots come from `:paths` in the project's `deps.edn`, with `src` and
+`test` as the default. The browser also indexes the conventional test
+directory, literal paths in recognized test aliases and test paths in
+Kaocha's `tests.edn`. Opening the project reads configuration as data. To set
+the exact roots, repeat `--source-root`:
 
 ```sh
 clojure -Srepro -M:tui --project /path/to/project --source-root src --source-root test
@@ -164,6 +173,11 @@ searched and the supported file formats.
    order of top-level forms — `(ns shop.orders)` first, then `total`,
    `discount`, `receipt` — with the selected definition marked. `Esc` or the
    button returns to the editor; selecting an entry in Desktop navigates to it.
+8. In Desktop, right-click `total` in **Definitions** and choose **Find related
+   tests**. Open `shop.orders-test/total-test` from the results, then right-click
+   `orders/total` in the editor and choose **Go to definition**. The menu uses
+   the definition name when there is no symbol under the pointer. With the
+   keyboard, open the context menu at the caret or on the selected row.
 
 Navigation, reload, opening another project and normal exit are blocked while
 there is a draft to save or discard. Desktop disables the lists while a draft
@@ -253,13 +267,17 @@ demonstrate that compatibility.
 
 ## REPL walkthrough
 
-Start a trusted Clojure/JVM nREPL in the project you want to work with. For the
-sample project, run this in `examples/sample-project`. The server prints its
-port and writes it to `.nrepl-port`.
+Start a trusted Clojure/JVM nREPL in the project you want to work with. For
+the bundled examples, run the corresponding command from that project's root.
 
-```sh
-clojure -Srepro -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.7.0"}}}' -M -m nrepl.cmdline --bind 127.0.0.1
-```
+| Project | Command |
+|---|---|
+| `examples/sample-project` | `clojure -Srepro -M:repl` |
+| `examples/poly-sample-project` | `clojure -Srepro -M:dev:test:repl` |
+
+The launcher loads the example tests and starts nREPL on a free loopback port.
+It writes the port to `.nrepl-port`. Keep it running while using CSB and stop
+it with Ctrl+C.
 
 1. Open the same project in CSB. Select **REPL** in Desktop or press `p` in
    the TUI. The panel fills the port from `.nrepl-port` in the root of the
@@ -270,10 +288,10 @@ clojure -Srepro -Sdeps '{:deps {nrepl/nrepl {:mvn/version "1.7.0"}}}' -M -m nrep
 2. Type an expression such as `(+ 20 22)` and select **Evaluate** or press
    F5 in the TUI. Enter inserts a newline in the TUI expression field.
    The transcript labels the value, standard output and standard error.
-3. Evaluate `(require 'shop.orders)` in the panel to load the sample namespace.
-   Select a definition in Source World and choose **Evaluate definition** or
-   press F6 in the TUI. This sends the visible definition, including any draft,
-   in its already loaded namespace. **Save** is the separate disk operation.
+3. Select a definition from the loaded `shop.orders` namespace in Source World.
+   Choose **Evaluate definition** or press F6 in the TUI. This sends the visible
+   definition, including any draft, in its already loaded namespace.
+   **Save** is the separate disk operation.
 4. Choose **Inspect runtime** or press F4 to open **Live**, then select a
    namespace or var and choose **Open** or press Enter. The inspector shows
    public and private vars and their available metadata. **Combined** (Tab in
@@ -292,6 +310,52 @@ The clients use one active request at a time and issue inspection queries in a
 separate session. Evaluation requests interruption after 60 seconds. Side
 effects that already happened persist. Programs that request stdin show a
 message and can be interrupted.
+
+## Test Runner
+
+Open **Tests** in Desktop or press F3 in the TUI. The view groups indexed
+Clojure JVM tests by namespace and opens the selected definition with **Open
+test source** or Enter. Use `--source-root` for test paths outside the current
+index.
+
+Choose **Run suite** (F4), **Run namespace** (F5) or **Run test** (F6).
+Both examples work directly from Tests. CSB launches a process in the
+project directory and streams stdout and stderr into the results pane. Use
+PgUp/PgDn to scroll in the TUI or **Stop tests** (F7) to stop the process.
+
+- For Clojure CLI, CSB uses the first configured `:main-opts` or `:exec-fn`
+  among `:test`, `:tests` and `:kaocha`. Kaocha and Cognitect runs use their native
+  selectors. For other aliases, scoped runs use `clojure.test` with the same test
+  classpath. A project with only test paths can run its indexed JVM tests.
+- Leiningen projects use `lein test` with their normal test profiles and
+  selectors. A `test` task in `bb.edn` can run as `bb test` and displays
+  output and exit status.
+
+Dots are orange while a test is running or queued, green when it passes,
+red when it fails and gray when the runner supplies no conclusive result.
+Clojure CLI and Leiningen runs collect test events alongside the normal command output.
+A namespace turns green when every indexed test in it has a passing result.
+The dots also appear next to test namespaces in the main browser.
+
+### Java VMs
+
+With a project open, choose **Java VMs…** in Desktop or press `j` in the
+TUI. Use the Desktop dropdown or press `Tab` in the TUI to choose a detected
+installation. The selection fills the path field. You can also enter an
+absolute JDK directory such as `/usr/lib/jvm/java-21-openjdk` on Linux.
+Apply to save the selection in your local preferences for that project.
+Clear the field to inherit the environment that launched CSB.
+
+Discovery checks the current runtime, `JAVA_HOME`, `PATH`, and common
+system and user installation folders, including `/usr/lib/jvm`, `~/.jdks`,
+and SDKMAN's default directory. It reads versions from the JDK's
+`release` file when available.
+
+The Test Runner uses the selected JDK for its Clojure CLI and Leiningen
+processes, including any compilation performed by the test command. CSB
+itself can run on Java 27 while those commands run on Java 21. An nREPL
+server uses the Java version it was started with. See
+[ADR 017](docs/decisions/017-project-java-vms.md).
 
 ## Headless API
 
@@ -395,13 +459,18 @@ Java binary.
   only in diagnostics.
 - Live World observes the JVM on request. Combined reports presence by name
   relative to the source index. Runtime locations and other metadata come
-  from the observed vars. The Test Runner remains on the roadmap.
+  from the observed vars. The Test Runner starts its own process using the
+  saved project files.
+- Desktop symbol searches use indexed project definitions and recognize direct
+  `:require` aliases and explicit `:refer` entries. Uses and related tests are
+  structural matches in saved source. Locals can shadow these names, and
+  macro expansion, dynamic dispatch and indirect test calls are outside the lookup.
 
 ## Verification
 
 ```sh
 clojure -Srepro -M:test
-clj-kondo --lint src apps test test-live test-desktop test-tui test-support deps.edn build.clj
+clj-kondo --lint src apps extensions test test-live test-desktop test-tui test-support deps.edn build.clj
 clojure -Srepro -M:live-test
 clojure -Srepro -M:tui:tui-test
 JAVA_CMD=/usr/lib/jvm/java-27-openjdk/bin/java clojure -Srepro -M:desktop:desktop-test

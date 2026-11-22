@@ -202,6 +202,65 @@
             (map-indexed vector (str/split-lines (frame ui))))
       (throw (ex-info "Text is not visible" {:fragment fragment}))))
 
+(deftest project-java-vm-editor-isolates-source-shortcuts
+  (fixture/with-example
+   (fn [root]
+     (with-terminal root
+       (fn [{:keys [state] :as ui}]
+         (total! ui)
+         (session/edit! state fixture/total-draft)
+         (press! ui \j)
+         (is (str/includes? (frame ui) "Java VMs"))
+         (press! ui KeyType/Tab)
+         (is (str/includes? (frame ui) "Installed Java VMs"))
+         (is (str/includes? (frame ui) (str "Java " (.feature (Runtime/version)))))
+         (press! ui KeyType/Enter)
+         (is (not (str/blank? (get-in @state [:java-vm-editor :input]))))
+         (press! ui KeyType/Escape)
+         (press! ui \j)
+         (is (true? (press! ui \q)))
+         (press! ui KeyType/Enter)
+         (is (str/includes? (frame ui) "absolute"))
+         (press! ui KeyType/Backspace)
+         (doseq [ch (System/getProperty "java.home")] (press! ui ch))
+         (press! ui KeyType/Enter)
+         (is (str/includes? (frame ui) "Java VM saved"))
+         (is (= fixture/total-draft (:draft @state)))
+         (press! ui \j)
+         (is (str/includes? (frame ui) (System/getProperty "java.home")))
+         (doseq [_ (System/getProperty "java.home")] (press! ui KeyType/Backspace))
+         (press! ui KeyType/Enter)
+         (is (str/includes? (frame ui) "Inherit launcher environment")))))))
+
+(deftest tests-view-executes-suites-and-namespaces-without-a-repl
+  (fixture/with-test-project
+   (fn [root]
+     (with-terminal root
+       (fn [{:keys [state screen last-frame] :as ui}]
+         (let [draw! #(#'tui/render-if-changed! screen @state last-frame)
+               led #(colour-at ui (str "● " %))]
+           (press! ui \?)
+           (press! ui KeyType/F3)
+           (is (str/includes? (frame ui) "Test namespaces"))
+           (is (= (TextColor$Indexed. 248) (led "shop.orders-test")))
+           (press! ui KeyType/F4)
+           (is (= (TextColor$Indexed. 215) (led "passing-test")))
+           (is (str/includes? (frame ui) "Running"))
+           (fixture/await-state! state #(= :failed (get-in % [:test-runner :last-run :status])))
+           (draw!)
+           (is (= (TextColor$Indexed. 114) (led "passing-test")))
+           (is (= (TextColor$Indexed. 210) (led "failing-test")))
+           (is (str/includes? (frame ui) "Configured suite command"))
+           (press! ui KeyType/F5)
+           (fixture/await-state! state #(= :failed (get-in % [:test-runner :last-run :status])))
+           (draw!)
+           (is (str/includes? (frame ui) "Ran 2 tests"))
+           (is (str/includes? (frame ui) "expected:"))
+           (press! ui KeyType/Enter)
+           (is (= 'shop.orders-test (:namespace @state)))
+           (is (str/includes? (frame ui) "deftest failing-test"))
+           (is (= (TextColor$Indexed. 210) (led "shop.orders-test")))))))))
+
 (deftest source-syntax-is-coloured-in-both-themes-without-changing-the-draft
   (fixture/with-example
    (fn [root]
@@ -602,6 +661,24 @@
         (press! ui KeyType/ArrowDown)
         (is (nil? (:category @state)))
         (is (= #{'discount 'receipt 'total} (set (map :name (session/definitions @state))))))))))
+
+(deftest requires-selector-shows-namespace-declarations
+  (fixture/with-example
+   (fn [root]
+     (with-terminal
+      root
+      (fn [{:keys [state] :as ui}]
+        (press! ui KeyType/ArrowDown)
+        (is (= 'shop.orders-test (:namespace @state)))
+        (is (str/includes? (frame ui) "(requires)"))
+        (press! ui KeyType/Tab)
+        (press! ui KeyType/ArrowDown)
+        (is (= :requires (:category @state)))
+        (is (str/includes? (frame ui) "[shop.orders :as orders]"))
+        (press! ui \e)
+        (is (str/includes? (frame ui) "Requires are read-only."))
+        (press! ui KeyType/ArrowUp)
+        (is (str/includes? (frame ui) "(deftest total-test")))))))
 
 (defn -main [& _]
   (let [r (test/run-tests 'csb.tui-smoke)]

@@ -5,6 +5,7 @@
             [clojure.spec.alpha :as spec]
             [clojure.string :as str]
             [csb.model :as m]
+            [csb.test-config :as test-config]
             [rewrite-clj.node :as n]
             [rewrite-clj.parser :as p])
   (:import [java.nio ByteBuffer CharBuffer]
@@ -127,17 +128,73 @@
                 (spec/valid? ::core-specs/defn-args (rest form)))
     (m/fail! :parse "Expected one defn/defn- with a name and parameter vector" {})))
 
-(defn- namespace-aliases [ns-node]
-  (into {}
-        (for [clause (drop 2 (list-parts ns-node))
-              :let [parts (list-parts clause)]
-              :when (= ":require" (some-> parts first n/string))
-              libspec (rest parts)
-              :when (= :vector (n/tag libspec))
-              :let [items (vec (significant libspec)) target (leaf-symbol (first items))]
-              [key value] (partition 2 (rest items))
-              :when (and target (#{":as" ":as-alias"} (n/string key)) (leaf-symbol value))]
-          [(leaf-symbol value) target])))
+(defn- reader-children [node]
+  (remove #(= :uneval (n/tag %)) (significant node)))
+
+(defn- requires-declaration? [node]
+  (let [node (bare-node node)]
+    (case (n/tag node)
+      :list (contains? #{":require" ":require-macros"} (some-> node reader-children first n/string))
+      :reader-macro
+      (let [[marker branches] (reader-children node)
+            marker (some-> marker n/string)]
+        (when (and (#{"?" "?@"} marker) branches (= :list (n/tag branches)))
+          (some (fn [[_ branch]]
+                  (if (= "?@" marker)
+                    (when (#{:list :vector} (n/tag branch))
+                      (some requires-declaration? (reader-children branch)))
+                    (requires-declaration? branch)))
+                (partition 2 (reader-children branches)))))
+      false)))
+
+(defn- requires-declarations [body ns-node]
+  (into [] (comp (filter requires-declaration?)
+                 (map (fn [node]
+                        (let [{:keys [start end]} (node-range body node)]
+                          (subs body start end)))))
+        (drop 2 (when ns-node (reader-children (bare-node ns-node))))))
+
+(defn- namespace-bindings [ns-node]
+  (reduce (fn [bindings [target option value]]
+            (case option
+              ":as" (if-let [alias (leaf-symbol value)]
+                      (-> bindings (assoc-in [:aliases alias] target)
+                          (assoc-in [:reader-aliases alias] target))
+                      bindings)
+              ":as-alias" (if-let [alias (leaf-symbol value)]
+                            (assoc-in bindings [:reader-aliases alias] target)
+                            bindings)
+              ":refer" (if (= :vector (n/tag value))
+                         (update bindings :refers into
+                                 (for [node (significant value) :let [sym (leaf-symbol node)] :when sym]
+                                   [sym target]))
+                         bindings)
+              bindings))
+          {:aliases {} :reader-aliases {} :refers {}}
+          (for [clause (drop 2 (when ns-node (list-parts ns-node)))
+                :let [parts (list-parts clause)]
+                :when (= ":require" (some-> parts first n/string))
+                libspec (rest parts)
+                :when (= :vector (n/tag libspec))
+                :let [items (significant libspec) target (leaf-symbol (first items))]
+                :when target
+                [key value] (partition 2 (rest items))]
+            [target (n/string key) value])))
+
+(defn- symbol-children [node]
+  (case (n/tag node)
+    (:uneval :quote :syntax-quote :eval) nil
+    :meta [(bare-node node)]
+    :list (let [parts (significant node)]
+            (when-not (#{'quote 'comment 'clojure.core/comment} (leaf-symbol (first parts)))
+              parts))
+    (when (n/inner? node) (significant node))))
+
+(defn definition-symbols
+  "Symbols in the body of an indexed definition, with quoted and discarded forms omitted."
+  [definition]
+  (into #{} (comp (mapcat #(tree-seq n/inner? symbol-children %)) (keep leaf-symbol))
+        (drop 2 (list-parts (first (significant (parse (:source definition))))))))
 
 (defn- private-map? [node]
   (and node (= :map (n/tag node))
@@ -198,7 +255,8 @@
         ns-nodes (filter #(= 'ns (some-> (list-parts %) first leaf-symbol)) nodes)
         ns-sym (when (= 1 (count ns-nodes))
                  (some-> ns-nodes first list-parts second leaf-symbol))
-        aliases (if (= 1 (count ns-nodes)) (namespace-aliases (first ns-nodes)) {})
+        ns-node (when ns-sym (first ns-nodes))
+        bindings (namespace-bindings ns-node)
         editable-document? (and (= 1 (count ns-nodes)) ns-sym)
         rev (revision bytes)
         definitions
@@ -235,7 +293,10 @@
                  (form-entry body ordinal node
                              (when (contains? def-ordinals ordinal) [(str file) ordinal])))
                nodes)]
-    {:file (str file) :namespace ns-sym :aliases aliases :revision rev :text text :bytes bytes
+    {:file (str file) :namespace ns-sym :aliases (:reader-aliases bindings)
+     :symbol-context (assoc (select-keys bindings [:aliases :refers]) :namespace ns-sym)
+     :requires (requires-declarations body ns-node)
+     :revision rev :text text :bytes bytes
      :error (when-not ns-sym
               {:type :unsupported :message "File must declare exactly one identifiable top-level namespace"
                :details {:file (str file)}})
@@ -303,23 +364,25 @@
           (brick-family projects ["src"])))))
 
 (defn- source-paths [^Path root roots]
-  (let [configured (or roots
-                       (let [deps (.resolve root "deps.edn")]
-                         (when (Files/isRegularFile deps no-links)
-                           (:paths (edn/read-string {:readers {} :default (fn [tag _]
-                                                   (m/fail! :unsupported "Unsupported deps.edn tag" {:tag tag}))}
-                                     (decode (Files/readAllBytes deps)))))))
-        candidates (cond
-                     (seq configured) configured
-                     (polylith? root) (polylith-roots root)
-                     :else ["src" "test"])]
-    (when-not (and (sequential? candidates) (every? string? candidates))
+  (let [deps-file (.resolve root "deps.edn")
+        deps (when (and (nil? roots) (Files/isRegularFile deps-file no-links))
+               (edn/read-string {:readers {} :default (fn [tag _]
+                                                       (m/fail! :unsupported "Unsupported deps.edn tag" {:tag tag}))}
+                                (decode (Files/readAllBytes deps-file))))
+        configured (or roots (:paths deps))
+        base (cond
+               (seq configured) configured
+               (polylith? root) (polylith-roots root)
+               :else ["src" "test"])]
+    (when-not (and (sequential? base) (every? string? base))
       (m/fail! :invalid-project "Source roots must be a sequence of strings" {}))
-    (mapv (fn [s]
-            (let [p (.normalize (.resolve root s))]
-              (when-not (.startsWith p root)
-                (m/fail! :unsupported "Source roots outside the project need a separate project" {:root s}))
-              p)) candidates)))
+    (->> (concat base (when (nil? roots) (test-config/test-paths root deps)))
+         (map (fn [s]
+                (let [p (.normalize (.resolve root ^String s))]
+                  (when-not (.startsWith p root)
+                    (m/fail! :unsupported "Source roots outside the project need a separate project" {:root s}))
+                  p)))
+         distinct vec)))
 
 (defn- source-files [roots]
   (->> roots
@@ -359,6 +422,14 @@
         (reset! index (into {} (map (juxt :id identity) defs)))
         {:root (str root) :roots (mapv str roots) :definitions defs
          :namespaces (->> results (keep :namespace) distinct (sort-by str) vec)
+         :requires (->> results
+                        (keep (fn [{:keys [file namespace requires]}]
+                                (when (seq requires)
+                                  {:namespace namespace :file file :declarations requires})))
+                        (group-by :namespace))
+         :symbol-contexts (into {} (keep (fn [{:keys [file symbol-context]}]
+                                           (when (:namespace symbol-context) [file symbol-context])))
+                                results)
          :diagnostics (vec (keep #(when (:error %) (select-keys % [:file :error])) results))
          ;; Parse-failed results have no :forms and stay in :diagnostics.
          :source-forms (vec (keep #(when (contains? % :forms)

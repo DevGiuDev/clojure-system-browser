@@ -5,6 +5,7 @@
             [csb.repl :as repl]
             [csb.service :as service]
             [csb.session :as session]
+            [csb.tests :as tests]
             [csb.tui-terminal :as terminal]
             [csb.tui-view :as view])
   (:import [com.googlecode.lanterna TerminalSize]
@@ -63,9 +64,13 @@
     (finally (.startScreen screen) (.setCursorPosition screen nil))))
 
 (defn- edit-external! [^TerminalScreen screen state]
-  (if-not (get-in @state [:definition :writable?])
+  (cond
+    (= :requires (:category @state))
+    (swap! state assoc :status "Requires are read-only.")
+    (not (get-in @state [:definition :writable?]))
     (swap! state assoc :status (str "This definition is read-only: "
                                    (get-in @state [:definition :read-only-reason])))
+    :else
     (try
       ;; Resolve configuration while the screen is active, before creating a temporary.
       (let [argv (cli/editor-argv)
@@ -171,6 +176,73 @@
       (and (or disconnected? connected?) (not (.isCtrlDown key)) (not (.isAltDown key)))
       (edit-repl! state key (if connected? :input (get @state :repl-address-field :port))))))
 
+(defn- show-repl! [state]
+  (repl/show-panel! state)
+  (swap! state #(assoc % :repl-address-field :port
+                       :repl-caret
+                       (merge (:repl-caret %)
+                              {:port [0 (count (get-in % [:repl :port]))]
+                               :host [0 (count (get-in % [:repl :host] repl/default-host))]}))))
+
+(defn- java-vm-key! [state ^KeyStroke key]
+  (let [{:keys [input caret installed choice-index]} (:java-vm-editor @state)
+        type (.getKeyType key)]
+    (if (some? choice-index)
+      (cond
+        (#{KeyType/Escape KeyType/Tab} type) (swap! state update :java-vm-editor dissoc :choice-index)
+        (= KeyType/Enter type) (session/set-java-home-input! state (:home (nth installed choice-index)))
+        (#{KeyType/ArrowDown KeyType/ArrowUp} type)
+        (let [delta (if (= KeyType/ArrowDown type) 1 -1)]
+          (swap! state assoc-in [:java-vm-editor :choice-index]
+                 (max 0 (min (dec (count installed)) (+ choice-index delta))))))
+      (condp = type
+        KeyType/Escape (swap! state dissoc :java-vm-editor)
+        KeyType/Enter (session/apply-java-vm! state)
+        KeyType/Tab (when (seq installed)
+                      (swap! state assoc-in [:java-vm-editor :choice-index]
+                             (max 0 (.indexOf ^java.util.List (mapv :home installed) input))))
+        (let [widget (TextBox. ^String input TextBox$Style/SINGLE_LINE)]
+          (.setCaretPosition widget 0 (int (or caret (count input))))
+          (.handleKeyStroke widget key)
+          (swap! state update :java-vm-editor assoc
+                 :input (.getText widget) :caret (.getColumn (.getCaretPosition widget)) :error nil))))))
+
+(defn- tests-key! [state ^KeyStroke key ^TerminalSize size]
+  (let [s @state
+        type (.getKeyType key)
+        tree (tests/targets s)
+        ns-sym (tests/selected-namespace s tree)
+        definitions (get tree ns-sym)
+        selected (tests/selected-test s definitions)
+        test-focus? (get-in s [:tests-view :test-focus?])]
+    (cond
+      (or (= type KeyType/Escape) (= type KeyType/F3))
+      (swap! state assoc-in [:tests-view :open?] false)
+
+      (#{KeyType/Tab KeyType/ArrowLeft KeyType/ArrowRight} type)
+      (swap! state update-in [:tests-view :test-focus?] not)
+
+      (#{KeyType/ArrowDown KeyType/ArrowUp} type)
+      (let [items (if test-focus? definitions (vec (sort-by str (keys tree))))
+            idx (.indexOf ^java.util.List (vec items) (if test-focus? selected ns-sym))
+            next-idx (+ idx (if (= type KeyType/ArrowUp) -1 1))]
+        (when-let [item (get items next-idx)]
+          (if test-focus? (tests/select-test! state item) (tests/select-namespace! state item))))
+
+      (= type KeyType/Enter) (tests/open-source! state selected)
+      (= type KeyType/F4) (tests/run! state nil nil)
+      (= type KeyType/F5) (when ns-sym (tests/run! state ns-sym nil))
+      (= type KeyType/F6) (when selected (tests/run! state ns-sym (:name selected)))
+      (= type KeyType/F7) (tests/cancel! state)
+      (= \j (.getCharacter key)) (session/show-java-vms! state)
+      (#{KeyType/PageDown KeyType/PageUp} type)
+      (let [page (view/test-detail-page-size (.getRows size))
+            total (count (view/test-detail-lines (.getColumns size) (tests/result s)))
+            delta (if (= type KeyType/PageUp) page (- page))]
+        (swap! state update-in [:tests-view :detail-scroll]
+               #(min (max 0 (- total page)) (max 0 (+ (or % 0) delta)))))
+      (= \p (.getCharacter key)) (show-repl! state))))
+
 (defn- step! [^TerminalScreen screen state last-frame]
   (render-if-changed! screen @state last-frame)
   (let [^KeyStroke key (.pollInput screen)
@@ -179,15 +251,21 @@
         size (.getTerminalSize screen)
         page-size (view/page-size (.getRows size))
         repl-open? (:repl-open? @state)
+        tests-open? (get-in @state [:tests-view :open?])
+        java-vm-open? (:java-vm-editor @state)
         eof? (= type KeyType/EOF)
-        quit? (and (not repl-open?) (= ch \q))]
+        quit? (and (not (or repl-open? tests-open? java-vm-open?)) (= ch \q))]
     (when (and eof? (:dirty? @state)) (retain-draft! state))
     (if (or eof? (and quit? (not (:dirty? @state))))
       false
       (do
         (cond
+          java-vm-open? (when key (java-vm-key! state key))
           repl-open? (when key (repl-key! state key size))
+          tests-open? (when key (tests-key! state key size))
           quit? (swap! state assoc :status "Unsaved changes: s to Save or d to Discard, then q")
+          (= type KeyType/F3) (when (:system @state) (swap! state assoc-in [:tests-view :open?] true))
+          (= ch \j) (session/show-java-vms! state)
           (= type KeyType/Tab) (swap! state update :focus #(mod (inc (or % 0)) 3))
           (= type KeyType/ArrowRight) (swap! state update :focus #(mod (inc (or % 0)) 3))
           (= type KeyType/ArrowLeft) (swap! state update :focus #(mod (+ 2 (or % 0)) 3))
@@ -199,12 +277,7 @@
           (= ch \!) (swap! state #(assoc % :diagnostics? (not (:diagnostics? %)) :help? false :scroll 0))
           (= ch \o) (swap! state #(assoc % :source-order? (not (:source-order? %))
                                            :help? false :diagnostics? false :scroll 0))
-          (= ch \p) (do (repl/show-panel! state)
-                         (swap! state #(assoc % :repl-address-field :port
-                                              :repl-caret
-                                              (merge (:repl-caret %)
-                                                     {:port [0 (count (get-in % [:repl :port]))]
-                                                      :host [0 (count (get-in % [:repl :host] repl/default-host))]}))))
+          (= ch \p) (show-repl! state)
           (= type KeyType/Escape) (swap! state assoc :editor-error nil :help? false :diagnostics? false
                                          :source-order? false :scroll 0)
           (= ch \s) (session/save! state)
@@ -228,7 +301,7 @@
     (.setCursorPosition screen nil)
     (let [last-frame (volatile! nil)]
       (loop [] (when (step! screen state last-frame) (recur))))
-    (finally (repl/disconnect! state) (.close screen))))
+    (finally (tests/cancel! state) (repl/disconnect! state) (.close screen))))
 
 (defn -main [& args]
   (try

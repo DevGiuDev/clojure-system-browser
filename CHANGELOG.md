@@ -13,6 +13,11 @@ project is 0.x, minor bumps carry features and the MVP stays free to evolve.
 - Prefill the nREPL port from `.nrepl-port` in the open project's root.
 - Configurable nREPL host and a shared inspector for loaded namespaces, vars,
   metadata and source/runtime presence in Desktop and TUI (ADR 014).
+- The `(requires)` selector in Desktop and TUI shows the selected namespace's
+  `:require` and `:require-macros` declarations in a read-only view (ADR 009).
+- Java VMs in Desktop and TUI selects a local JDK per project for test
+  processes, with a list of detected installations and manual path entry
+  (ADR 017).
 
 ## [0.2.0] - 2026-11-21
 

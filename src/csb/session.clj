@@ -1,6 +1,8 @@
 (ns csb.session
   "Shared client actions and draft lifecycle; independent of Desktop and terminal widgets."
   (:require [clojure.string :as str]
+            [csb.java-vm :as java-vm]
+            [csb.model :as model]
             [csb.service :as service]))
 
 (defn create [] (atom {:status "Open a project" :draft "" :dirty? false}))
@@ -9,23 +11,67 @@
   (when-let [system (:system state)] (:value (service/list-namespaces system))))
 
 (defn categories
-  "Category facets composed with the \"(all)\" sentinel: {:total :files :entries}.
-   The sentinel entry carries :category nil and the namespace total."
+  "Return category facets and the `(all)` and `(requires)` selectors."
   [state]
   (when-let [system (:system state)]
     (let [{:keys [total files facets]} (:value (service/list-categories system (:namespace state)))]
       (when facets
         {:total total :files files
-         :entries (conj (vec facets) {:category nil :count total})}))))
+         :entries (cond-> (conj facets {:category nil :count total})
+                    (:namespace state) (conj {:category :requires}))}))))
+
+(defn category-label [{:keys [category count]}]
+  (case category
+    :requires "(requires)"
+    nil "(all)"
+    (str (name category) " · " count)))
 
 (defn definitions [state]
-  (when-let [system (:system state)]
-    (let [category (:category state)]
-      (->> (:value (service/list-definitions system (:namespace state)))
-           (filter #(or (nil? category) (= category (:category %)))) vec))))
+  (let [{:keys [system namespace category]} state]
+    (when system
+      (if (= :requires category)
+        []
+        (->> (:value (service/list-definitions system namespace))
+             (filter #(or (nil? category) (= category (:category %)))) vec)))))
+
+(defn requires-text [{:keys [system namespace]}]
+  (let [entries (:value (service/list-requires system namespace))]
+    (case (count entries)
+      0 "No requires declared."
+      1 (str/join "\n" (:declarations (first entries)))
+      (str/join "\n\n"
+                (map (fn [{:keys [file declarations]}]
+                       (str ";; " file "\n" (str/join "\n" declarations)))
+                     entries)))))
 
 (defn- message [result]
   (str (name (get-in result [:error :type] :error)) ": " (get-in result [:error :message])))
+
+(defn show-java-vms! [state]
+  (when-let [root (some-> (:system @state) service/project-info :root)]
+    (let [setting (model/attempt #(java-vm/project-home root))]
+      (swap! state assoc :java-vm-editor {:input (or (:value setting) "")
+                                         :installed (java-vm/discover)
+                                         :error (get-in setting [:error :message])}))))
+
+(defn set-java-home-input! [state home]
+  (swap! state (fn [s]
+                 (if (:java-vm-editor s)
+                   (update s :java-vm-editor #(assoc (dissoc % :choice-index :caret)
+                                                     :input home :error nil))
+                   s))))
+
+(defn apply-java-vm! [state]
+  (let [{:keys [system java-vm-editor]} @state]
+    (when (and system java-vm-editor)
+      (let [root (:root (service/project-info system))
+            result (model/attempt #(java-vm/save-home! root (:input java-vm-editor)))]
+        (if (= :ok (:status result))
+          (swap! state #(-> %
+                            (dissoc :java-vm-editor)
+                            (assoc :status (str "Java VM saved · "
+                                                (or (:value result) "Inherit launcher environment")))))
+          (swap! state assoc-in [:java-vm-editor :error] (get-in result [:error :message])))))))
 
 (defn- allow-navigation! [state]
   (if (:dirty? @state)
@@ -52,7 +98,8 @@
         (let [system (:value result)
               available (:value (service/list-namespaces system))
               ns-sym (first available)]
-          (swap! state #(select-first (assoc % :system system :namespace ns-sym
+          (swap! state #(select-first (assoc (dissoc % :java-vm-editor)
+                                            :system system :namespace ns-sym
                                             :filter "" :focus 0 :scroll 0
                                             :help? false :diagnostics? false :source-order? false
                                             :status (project-status system "Source World")))))
@@ -65,16 +112,22 @@
 (defn select-category! [state category]
   (when (and (not= category (:category @state)) (allow-navigation! state))
     (swap! state (fn [s]
-                   (let [s (assoc s :category category)
+                   (let [s (cond-> (assoc s :category category)
+                             (= :requires category) (assoc :source-order? false
+                                                          :help? false :diagnostics? false))
                          d (first (definitions s))]
                      (assoc s :definition d :draft (or (:source d) "") :dirty? false))))))
 
-(defn select-definition! [state id]
-  (when (and (not= id (get-in @state [:definition :id])) (allow-navigation! state))
-    (let [result (service/get-definition-source (:system @state) id)]
-      (if (= :ok (:status result))
-        (swap! state assoc :definition (:value result) :draft (:source (:value result)) :dirty? false)
-        (swap! state assoc :status (message result))))))
+(defn select-definition!
+  ([state id] (select-definition! state id {}))
+  ([state id {:keys [reveal?]}]
+   (when (and (or reveal? (not= id (get-in @state [:definition :id]))) (allow-navigation! state))
+     (let [result (service/get-definition-source (:system @state) id)]
+       (if (= :ok (:status result))
+         (let [d (:value result)]
+           (swap! state #(cond-> (assoc % :definition d :draft (:source d) :dirty? false)
+                           reveal? (assoc :namespace (:namespace d) :category nil :filter "" :source-order? false))))
+         (do (swap! state assoc :status (message result)) nil))))))
 
 (defn edit! [state text]
   (when (get-in @state [:definition :writable?])

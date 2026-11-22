@@ -1,19 +1,48 @@
 # Implementation verification
 
-Date: 2026-11-15. Updated: 2026-11-21. This record distinguishes checks that
+Date: 2026-11-15. Updated: 2026-11-22. This record distinguishes checks that
 were executed from prepared verifications.
 
 ## Summary of the latest recorded results
 
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
-| Core, external editor, lexical classifier, source order, facets and Polylith discovery | 48 | 371 | No failures or errors; JDK 27 and 21 |
-| Desktop with headless JavaFX controls | 11 | 101 | No failures or errors; JDK 27 |
-| TUI with virtual terminal | 17 | 217 | No failures or errors; JDK 27 |
-| nREPL integration | 7 | 38 | No failures or errors; JDK 27 |
-| Suite total | **83** | **727** | No failures or errors |
+| Core, including test path and Java VM discovery | 53 | 391 | No failures or errors; JDK 27 |
+| Desktop with headless JavaFX controls | 15 | 137 | No failures or errors; JDK 27 |
+| TUI with virtual terminal | 20 | 245 | No failures or errors; JDK 27 |
+| nREPL and test process integration | 9 | 51 | No failures or errors; JDK 27 |
+| Suite total | **97** | **824** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | **40 checks**, no failures |
 | clj-kondo | — | — | 0 errors, 0 warnings |
+
+Java VM discovery found seven installations on the Linux test machine,
+including Java 21 and 27. A filesystem fixture verifies discovery from the
+environment and installation folders, alias deduplication, version metadata,
+and the exclusion of wrapper scripts and incomplete directories. The Desktop
+dropdown and TUI selector fill an editable path in their automated UI suites.
+
+On 2026-11-22, Java VMs was exercised in the headless Desktop and virtual TUI
+with temporary user preferences. The checks cover invalid paths, saving and
+clearing the setting, project isolation, and draft retention. With CSB running
+on Java 27, the Desktop test verified Java 21 from inside the Clojure CLI child
+process. A separate CSB invocation reused the saved setting to run `lein test`
+on a disposable copy of `cljgame`. Leiningen reported **642 tests / 2231
+assertions**, including one added test that asserted the child ran on Java 21,
+with no failures or errors. This verification was automated on Linux.
+
+The `(requires)` selector was tested with headless JavaFX and a virtual
+terminal. Both clients display the namespace's declarations and return to
+definitions through `(all)`. Core checks cover reader conditionals, multiple
+source files, namespaces without requires and draft retention. Desktop used
+`.cache/m2` with the pinned versions in `deps.edn`, including Clojure 1.12.6,
+rewrite-clj 1.3.59 and JavaFX 27.0.1.
+
+For [source symbol lookup](decisions/015-source-symbol-lookup.md), the Desktop
+suite opens both context menus, navigates across namespaces and checks that
+opening a result cannot discard a draft. An automated click-through with the
+normal JavaFX window on Xvfb opened `total-test` from the `total` row and went
+back to `total` from `orders/total` in the editor. The window, menus and results
+were inspected in screenshots from that run.
 
 The TUI theme appearance is confirmed by the user in Emacs/EXWM. Full manual
 acceptance and review of the highlighting in that session remain pending. The
@@ -35,6 +64,48 @@ clean.
 order view, read-only) with automated verification in all three suites.
 Forward-reference diagnostics, load validation and write operations with
 placement remain unimplemented.
+
+## Project Test Runner (2026-11-22)
+
+- Desktop and TUI ran a configured suite in a child process. Both showed a
+  passing test in green and a failing test in red after the orange running
+  phase. The checks covered stdout, stderr, opening test source and a
+  scoped rerun. Desktop also passed on Xvfb (13 tests, 124 assertions).
+- The integration suite ran all four Polylith tests with the workspace's
+  development and test classpaths. The example `:test` alias also passed
+  through the shared client.
+- Disposable projects verified execution and filtering with Kaocha
+  1.91.1392 and Cognitect CLI and exec aliases, a custom exec function,
+  and a Babashka task. They also checked live output before cancellation
+  and tested that Kaocha's capture plugin preserves the event stream.
+- Leiningen 2.13.1 integration covered test-profile injections, a scoped
+  run, and namespace failure when a fixture throws after its tests pass.
+  On a disposable copy of `cljgame` with JDK 21, all 641 indexed tests and
+  42 namespaces turned green. Adding a failing test to the copy turned
+  that test and its namespace red while the other 641 stayed green.
+- JDK 27 built the TUI uberjar with the child observer bundled. Manual
+  client interaction remains pending.
+
+## Example nREPL launchers (2026-11-22)
+
+Started both example launchers concurrently from disposable project copies
+with JDK 27. The shared CSB client detected each port from `.nrepl-port`,
+evaluated an expression on both servers, and ran all five preloaded tests
+across four namespaces with zero failures or errors. The core suite passed
+again (49 tests, 376 assertions), and both example configurations passed lint.
+
+## Initial nREPL Test Runner (2026-11-21)
+
+- Desktop and TUI opened the Tests view offline, exercised gray, orange, green
+  and red indicators with a running nREPL server, and opened the selected
+  test's source. A failed individual run turned a previously green
+  namespace red in both views.
+- The nREPL suite verified fixture handling, missing namespaces and tests,
+  separate assertion failures and exceptions, cancellation, and preservation
+  of the console session and transcript.
+- The Desktop suite also passed with the graphical JavaFX backend on Xvfb
+  (13 tests, 122 assertions). The TUI uberjar built with the extension
+  included. Manual acceptance is pending.
 
 ## Live and Combined inspection (2026-11-21)
 

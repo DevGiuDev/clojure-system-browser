@@ -6,6 +6,7 @@
             [csb.syntax :as syntax])
   (:import [java.util Collections]
            [java.util.function Consumer]
+           [javafx.event EventHandler]
            [org.fxmisc.flowless VirtualizedScrollPane]
            [org.fxmisc.richtext CodeArea]
            [org.fxmisc.richtext.model StyleSpansBuilder]
@@ -63,6 +64,11 @@
                                                ;; its exact CRLF/CR text in the session.
                                                (edit (if (= text (display-text saved)) saved text))))))))
             editor (->Editor area container subscription props updating?)]
+        (.setOnContextMenuRequested area
+                                    (reify EventHandler
+                                      (handle [_ event]
+                                        (when-let [handler (:on-context-menu-requested @props)]
+                                          (handler area event)))))
         (.add (.getStylesheets area)
               (.toExternalForm (io/resource "csb/desktop/code-editor.css")))
         (sync-editor! editor desc)))

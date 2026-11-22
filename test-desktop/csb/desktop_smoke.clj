@@ -10,11 +10,12 @@
   (:import [java.nio.file Files]
            [javafx.application Platform]
            [javafx.event Event]
-           [javafx.scene.control Button Label ListView TextArea TextField]
-           [javafx.scene.input KeyCode KeyEvent]
+           [javafx.scene.control Button ComboBox ContextMenu Label ListCell ListView MenuItem TextArea TextField]
+           [javafx.scene.input ContextMenuEvent KeyCode KeyEvent]
            [javafx.scene.paint Color]
+           [javafx.scene.shape Circle]
            [javafx.scene.text Text]
-           [javafx.stage Stage WindowEvent]
+           [javafx.stage Stage Window WindowEvent]
            [org.fxmisc.richtext CodeArea]))
 
 (defn- await! [pending]
@@ -91,6 +92,140 @@
   (select! ui "#namespaces" "shop.orders")
   (select! ui "#categories" "functions")
   (select! ui "#definitions" "total ·"))
+
+(defn- context-action! [ui selector title]
+  (let [stage (sync! ui)
+        fired? (fx! (fn []
+                      (Event/fireEvent (node stage selector)
+                                       (ContextMenuEvent. ContextMenuEvent/CONTEXT_MENU_REQUESTED
+                                                          10 10 120 120 true nil))
+                      (when-let [^ContextMenu menu (some #(when (instance? ContextMenu %) %) (Window/getWindows))]
+                        (try
+                          (when-let [^MenuItem item (some #(when (= title (.getText ^MenuItem %)) %) (.getItems menu))]
+                            (.fire item)
+                            true)
+                          (finally (.hide menu))))))]
+    (sync! ui)
+    fired?))
+
+(deftest contextual-symbol-navigation
+  (fixture/with-example
+   (fn [root]
+     (with-window
+       (fn [{:keys [state] :as ui}]
+         (open! ui root)
+         (total! ui)
+         (when (is (context-action! ui "#definitions" "Find related tests"))
+           (select! ui "#symbol-results" "shop.orders-test/total-test")
+           (fire! ui "Open definition")
+           (is (= 'shop.orders-test (:namespace @state)))
+           (is (str/starts-with? (source ui) "(deftest total-test"))
+           (let [stage (sync! ui)]
+             (fx! #(let [^CodeArea area (node stage "#definition-source")]
+                     (.moveTo area (int (+ 2 (str/index-of (.getText area) "orders/total")))))))
+           (is (context-action! ui "#definition-source" "Go to definition"))
+           (is (= 'total (get-in @state [:definition :name])))
+           (is (= 'shop.orders (:namespace @state))))
+         (total! ui)
+         (edit! ui fixture/total-draft)
+         (when (is (true? (context-action! ui "#definition-source" "Find symbol uses")))
+           (select! ui "#symbol-results" "shop.orders-test/total-test")
+           (fire! ui "Open definition")
+           (is (= 'total (get-in @state [:definition :name]))))
+         (is (= fixture/total-draft (source ui)))
+         (is (:dirty? @state)))))))
+
+(deftest project-java-vm-can-be-saved-and-reopened
+  (fixture/with-example
+   (fn [root]
+     (with-window
+       (fn [{:keys [state] :as ui}]
+         (let [home (System/getProperty "java.home")
+               input #(let [stage (sync! ui)]
+                        (fx! (fn [] (.setText ^TextField (node stage "#java-home") %))))
+               selected-home #(let [stage (sync! ui)]
+                                (fx! (fn [] (.getText ^TextField (node stage "#java-home")))))]
+           (open! ui root)
+           (total! ui)
+           (edit! ui fixture/total-draft)
+           (fire! ui "Java VMs…")
+           (let [stage (sync! ui)
+                 selected (fx! #(when-let [^ComboBox box (node stage "#installed-java-vms")]
+                                  (when-let [item (some (fn [label] (when (str/ends-with? label home) label))
+                                                        (.getItems box))]
+                                    (.setValue box item)
+                                    item)))]
+             (is (some? selected))
+             (is (= home (selected-home))))
+           (input "missing-jdk")
+           (fire! ui "Apply Java VM")
+           (let [stage (sync! ui)]
+             (is (str/includes? (fx! #(.getText ^Label (node stage "#java-vm-error"))) "absolute")))
+           (input home)
+           (fire! ui "Apply Java VM")
+           (is (= fixture/total-draft (source ui)))
+           (session/discard! state)
+           (fixture/with-example
+            (fn [other-root]
+              (open! ui other-root)
+              (fire! ui "Java VMs…")
+              (is (= "" (selected-home)))))
+           (open! ui root)
+           (fire! ui "Java VMs…")
+           (is (= home (selected-home)))
+           (input "")
+           (fire! ui "Apply Java VM")
+           (is (str/includes? (status ui) "Inherit launcher environment"))))))))
+
+(deftest tests-view-runs-a-suite-and-colours-individual-tests
+  (fixture/with-test-project
+   (fn [root]
+     (with-window
+       (fn [{:keys [state] :as ui}]
+         (open! ui root)
+         (fire! ui "Java VMs…")
+         (let [home (or (System/getenv "CSB_TEST_JAVA_HOME") (System/getProperty "java.home"))
+               stage (sync! ui)]
+           (fx! #(.setText ^TextField (node stage "#java-home") home)))
+         (fire! ui "Apply Java VM")
+         (fire! ui "Tests")
+         (let [led (fn [selector label]
+                     (let [stage (sync! ui)]
+                       (fx! (fn []
+                              (let [root (.getRoot (.getScene stage))
+                                    ^ListView list (node stage selector)]
+                                (.applyCss root)
+                                (.layout root)
+                                (some (fn [^ListCell cell]
+                                        (when (= label (.getText cell))
+                                          (some-> ^Circle (.getGraphic cell) .getFill)))
+                                      (.lookupAll list ".list-cell")))))))]
+           (is (= (Color/web "#77808a") (led "#test-definitions" "passing-test")))
+           (fire! ui "Run suite")
+           (is (= (Color/web "#e48419") (led "#test-namespaces" "shop.orders-test")))
+           (is (= (Color/web "#e48419") (led "#test-definitions" "passing-test")))
+           (fixture/await-state! state #(= :failed (get-in % [:test-runner :last-run :status])))
+           (let [home (or (System/getenv "CSB_TEST_JAVA_HOME") (System/getProperty "java.home"))
+                 output (get-in @state [:test-runner :last-run :output])]
+             (is (some #{(str "Project JAVA_HOME " home)} output))
+             (is (some #{(str "Project Java runtime " home)} output)))
+           (is (= (Color/web "#218441") (led "#test-definitions" "passing-test")))
+           (is (= (Color/web "#c33737") (led "#test-definitions" "failing-test")))
+           (is (= (Color/web "#c33737") (led "#test-namespaces" "shop.orders-test")))
+           (let [stage (sync! ui)
+                 output (fx! #(.getText ^TextArea (node stage "#test-details")))]
+             (is (str/includes? output "Configured suite command"))
+             (is (str/includes? output "Suite stderr"))
+             (is (str/includes? output "1 failures, 0 errors")))
+           (select! ui "#test-definitions" "passing-test")
+           (fire! ui "Run test")
+           (fixture/await-state! state #(= :passed (get-in % [:test-runner :last-run :status])))
+           (is (= #{['shop.orders-test 'passing-test]}
+                  (get-in @state [:test-runner :last-run :targets])))
+           (fire! ui "Open test source")
+           (is (= 'shop.orders-test (:namespace @state)))
+           (is (str/includes? (source ui) "deftest passing-test"))
+           (is (= (Color/web "#c33737") (led "#namespaces" "shop.orders-test")))))))))
 
 (deftest repl-panel-preserves-the-source-draft-and-validates-the-port
   (fixture/with-example
@@ -447,6 +582,22 @@
          (is (nil? (:category @state)))
          (let [stage (sync! ui)]
            (is (= 3 (fx! #(count (.getItems ^ListView (node stage "#definitions"))))))))))))
+
+(deftest requires-selector-shows-namespace-declarations
+  (fixture/with-example
+   (fn [root]
+     (with-window
+       (fn [ui]
+         (open! ui root)
+         (select! ui "#namespaces" "shop.orders-test")
+         (let [stage (sync! ui)
+               categories (fx! #(vec (.getItems ^ListView (node stage "#categories"))))]
+           (is (some #{"(requires)"} categories))
+           (select! ui "#categories" "(requires)")
+           (is (str/includes? (source ui) "[shop.orders :as orders]"))
+           (is (false? (fx! #(.isEditable ^CodeArea (node stage "#definition-source")))))
+           (select! ui "#categories" "(all)")
+           (is (str/includes? (source ui) "(deftest total-test"))))))))
 
 (defn -main [& _]
   (try

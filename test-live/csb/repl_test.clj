@@ -1,14 +1,19 @@
 (ns csb.repl-test
-  (:require [clojure.string :as str]
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test :as test :refer [deftest is testing]]
             [csb.repl :as repl]
             [csb.session :as session]
+            [csb.tests :as tests]
             [nrepl.misc :as misc]
             [nrepl.server :as server]
             [nrepl.transport :as wire])
-  (:import [java.io Closeable]
+  (:import [java.io Closeable IOException]
            [java.lang ProcessBuilder$Redirect]
-           [java.net ServerSocket]))
+           [java.net ServerSocket]
+           [java.nio.file Files]
+           [java.nio.file.attribute FileAttribute]
+           [java.util.concurrent TimeUnit]))
 
 (defn- await! [state predicate]
   (let [done (promise) key (Object.)
@@ -215,6 +220,78 @@
           (is (str/includes? (transcript state) "=> 3"))
           (finally (repl/disconnect! state)
                    (await! state #(= :disconnected (:phase %)))))))))
+
+(defn- run-project-tests! [state namespace-name test-name]
+  (tests/run! state namespace-name test-name)
+  (let [completed (promise)
+        key (Object.)
+        check #(when (and (tests/result %) (not (tests/active? %))) (deliver completed %))]
+    (add-watch state key (fn [_ _ _ snapshot] (check snapshot)))
+    (try
+      (check @state)
+      (or (deref completed 30000 nil)
+          (throw (ex-info "Timed out waiting for project tests" (tests/result @state))))
+      (finally
+        (remove-watch state key)
+        (tests/cancel! state)))))
+
+(deftest tests-run-from-the-project-command-without-an-nrepl
+  (let [state (session/create)]
+    (session/open! state "examples/poly-sample-project" {})
+    (let [snapshot (run-project-tests! state nil nil)
+          run (tests/result snapshot)]
+      (is (= :passed (:status run)) (pr-str run))
+      (is (str/includes? (str/join "\n" (:output run)) "0 failures, 0 errors"))
+      (is (= :passed (tests/case-status snapshot 'poly.sample.shop.components.invoice-test 'total-adds-prices)))
+      (is (= 4 (count (filter #{:passed} (vals (get-in snapshot [:test-runner :cases])))))))))
+
+(defn- lein-executable? []
+  (when-let [process (try (.start (ProcessBuilder. ^java.util.List ["lein" "version"]))
+                          (catch IOException _ nil))]
+    (try
+      (and (.waitFor process 10 TimeUnit/SECONDS) (zero? (.exitValue process)))
+      (finally (when (.isAlive process) (.destroyForcibly process))))))
+
+(deftest leiningen-suite-reports-test-and-namespace-colours
+  (when (lein-executable?)
+    (let [root (.toFile (Files/createTempDirectory "csb-lein-test-" (make-array FileAttribute 0)))
+          project (io/file root "project.clj")
+          state (session/create)]
+      (try
+        (spit project
+              (format "(defproject csb-test-fixture \"0.1.0\"
+                         :dependencies [[org.clojure/clojure \"%s\"]]
+                         :profiles {:test {:injections [(System/setProperty \"csb.fixture\" \"ready\")]}})"
+                      (clojure-version)))
+        (let [good (io/file root "test/demo/good_test.clj")]
+          (io/make-parents good)
+          (spit good "(ns demo.good-test (:require [clojure.test :refer [deftest is]]))
+                      (deftest profile-injection (is (= \"ready\" (System/getProperty \"csb.fixture\"))))")
+          (spit (io/file root "test/demo/bad_test.clj")
+                "(ns demo.bad-test (:require [clojure.test :refer [deftest is]]))
+                 (deftest passing-check (is true))
+                 (deftest failed-check (is (= 1 2)))")
+          (spit (io/file root "test/demo/fixture_test.clj")
+                "(ns demo.fixture-test (:require [clojure.test :refer [deftest is use-fixtures]]))
+                 (use-fixtures :once (fn [f] (f) (throw (ex-info \"Teardown failed\" {}))))
+                 (deftest body-passes (is true))"))
+        (session/open! state root {})
+        (let [snapshot (run-project-tests! state nil nil)
+              run (tests/result snapshot)
+              tree (tests/targets snapshot)]
+          (is (= :failed (:status run)) (pr-str run))
+          (is (= :passed (tests/case-status snapshot 'demo.good-test 'profile-injection)))
+          (is (= :failed (tests/case-status snapshot 'demo.bad-test 'failed-check)))
+          (is (= :passed (tests/namespace-status snapshot 'demo.good-test (tree 'demo.good-test))))
+          (is (= :failed (tests/namespace-status snapshot 'demo.fixture-test (tree 'demo.fixture-test))))
+          (is (some #(str/includes? % "lein test :only demo.bad-test/failed-check") (:output run))))
+        (let [snapshot (run-project-tests! state 'demo.bad-test 'passing-check)
+              run (tests/result snapshot)]
+          (is (= :passed (:status run)) (pr-str run))
+          (is (= :passed (tests/case-status snapshot 'demo.bad-test 'passing-check)))
+          (is (some #(str/includes? % "Ran 1 tests") (:output run))))
+        (finally
+          (doseq [file (reverse (file-seq root))] (io/delete-file file true)))))))
 
 (defn -main [& _]
   (let [r (test/run-tests 'csb.repl-test)]

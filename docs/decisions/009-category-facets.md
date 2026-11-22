@@ -26,3 +26,9 @@ remain in the source order view (ADR 008).
 Update (2026-11-21, same day): the sentinel label is "(all)"; the initial
 implementation shipped it as "(todas)". Product strings and documentation are
 English throughout.
+
+Update (2026-11-22). Both clients add a "(requires)" selector for each
+namespace. It shows the indexed `:require` and `:require-macros` clauses in
+the source pane as read-only text. The index preserves the declarations and
+their reader conditionals in source order, grouped by file. Definition facet
+counts continue to describe definitions.

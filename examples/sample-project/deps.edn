@@ -1,1 +1,7 @@
-{:paths ["src" "test"]}
+{:paths ["src" "test"]
+ :aliases
+ {:test {:main-opts ["-e" "(require 'shop.orders-test)"
+                     "-e" "(when-not (clojure.test/successful? (clojure.test/run-tests 'shop.orders-test)) (System/exit 1))"]}
+  :repl {:extra-deps {nrepl/nrepl {:mvn/version "1.7.0"}}
+         :main-opts ["-e" "(require 'shop.orders-test)"
+                     "-m" "nrepl.cmdline" "--bind" "127.0.0.1" "--port" "0"]}}}

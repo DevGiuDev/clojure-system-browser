@@ -97,7 +97,8 @@
           (is (= [{:category :functions :count 1}
                   {:category :macros :count 1}
                   {:category :private-functions :count 1}
-                  {:category nil :count 3}]
+                  {:category nil :count 3}
+                  {:category :requires}]
                  entries)))
         ;; Selecting a facet narrows the list.
         (session/select-category! state :functions)
@@ -121,6 +122,28 @@
         (is (str/includes? (:status @state) ".cljd"))
         (session/reload! state)
         (is (str/includes? (:status @state) "No namespaces found"))))))
+
+(deftest requires-is-a-read-only-view-of-the-selected-namespace
+  (with-project {"src/a.clj" "(ns a (:require [external.lib :as lib])) (defn f [] 1)"
+                 "src/b.clj" "(ns b)"}
+    (fn [root]
+      (let [state (session/create)]
+        (session/open! state root {})
+        (is (= :requires (:category (last (:entries (session/categories @state))))))
+        (session/edit! state "(defn f [] 2)")
+        (session/select-category! state :requires)
+        (is (nil? (:category @state)))
+        (is (= "(defn f [] 2)" (:draft @state)))
+        (session/discard! state)
+        (session/select-category! state :requires)
+        (is (empty? (session/definitions @state)))
+        (is (nil? (:definition @state)))
+        (is (= "(:require [external.lib :as lib])" (session/requires-text @state)))
+        (session/select-category! state nil)
+        (is (= 'f (get-in @state [:definition :name])))
+        (session/select-namespace! state 'b)
+        (session/select-category! state :requires)
+        (is (= "No requires declared." (session/requires-text @state)))))))
 
 (deftest editor-commits-via-the-service
   (with-project {"src/a.clj" "(ns a) (defn f [] 1)"}

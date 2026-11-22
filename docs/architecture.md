@@ -28,10 +28,14 @@ parsers, ranges, zippers or internal paths to write.
 | `csb.source` | Discovery, parsing, revisions and byte replacement |
 | `csb.service` | Facade, snapshot, serialization and recent changes |
 | `csb.session` | Selection, draft, shared Save/Discard/Reload |
+| `csb.java-vm` | Local project JDK preferences and child process environment |
 | `csb.editor` | Temporaries and external editor processes |
 | `csb.extensions` | API v1, registry, collisions, capabilities and dispatch |
 | `csb.cli` | Arguments and EDN output of the index |
 | `csb.repl` | Shared connection, evaluation and transcript for the optional nREPL panel |
+| `csb.test-config` | Static project test configuration and test paths |
+| `csb.tests` | Shared test command execution, output, cancellation and result indicators |
+| `csb.test-command`, `csb.test-worker` | Project command selection and instrumentation inside its child JVM |
 | `csb.desktop` | cljfx descriptions and adaptation to JavaFX events |
 | `csb.syntax` | Lexical text classification for both clients, with no UI, reading or semantic-validation dependencies |
 | `csb.desktop.code-editor` | CodeArea life cycle and application of Desktop styles |
@@ -144,9 +148,9 @@ namespaced ID, title, handler and required capabilities. Commands and views
 receive a context with `:source/read` and a definition query. Handlers return
 data; the clients choose how to present it.
 
-Initial views are presented as textual data. The grammar for complex views
-will be defined from real Test Runner needs. Extensions are trusted code in
-the same JVM, with no security isolation.
+Generic extension views are presented as textual data. The Test Runner's
+dedicated view consumes its shared process commands and data in both clients.
+Extensions are trusted code in the same JVM, with no security isolation.
 
 ## Live World panel
 

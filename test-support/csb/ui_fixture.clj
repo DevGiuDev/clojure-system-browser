@@ -30,6 +30,28 @@
 
 (def total-draft "(defn total [lines]\n  (+ 10 (reduce + 0 (map :amount lines))))")
 
+(defn with-test-project [f]
+  (with-example
+    (fn [^Path root]
+      (write! (.resolve root "deps.edn")
+              "{:paths [\"src\"] :aliases {:test {:extra-paths [\"test\"] :main-opts [\"-m\" \"shop.test-driver\"]}}}")
+      (write! (.resolve root "test/shop/orders_test.clj")
+              "(ns shop.orders-test (:require [clojure.test :as t]))
+               (def ^:dynamic *fixture* false)
+               (t/use-fixtures :once (fn [run] (binding [*fixture* true] (run))))
+               (t/deftest passing-test (t/is *fixture*))
+               (t/deftest failing-test (t/is (= 1 2)))")
+      (write! (.resolve root "test/shop/test_driver.clj")
+              "(ns shop.test-driver (:require [clojure.test :as t] [shop.orders-test]))
+               (defn -main [& _]
+                 (println \"Configured suite command\")
+                 (println \"Project JAVA_HOME\" (System/getenv \"JAVA_HOME\"))
+                 (println \"Project Java runtime\" (System/getProperty \"java.home\"))
+                 (binding [*out* *err*] (println \"Suite stderr\"))
+                 (let [result (t/run-tests 'shop.orders-test)]
+                   (System/exit (if (t/successful? result) 0 1))))")
+      (f root))))
+
 (defn await-state! [state predicate]
   (let [ready (promise)
         key (Object.)
@@ -37,6 +59,6 @@
     (add-watch state key (fn [_ _ _ value] (check value)))
     (try
       (check @state)
-      (when-not (deref ready 6000 false)
+      (when-not (deref ready 15000 false)
         (throw (ex-info "Timed out waiting for client state" {})))
       (finally (remove-watch state key)))))
