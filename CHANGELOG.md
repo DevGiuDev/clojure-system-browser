@@ -6,7 +6,7 @@ version lives in `csb.cli/version` and is kept in sync with this file
 manually ([ADR 011](docs/decisions/011-versioning-changelog.md)). While the
 project is 0.x, minor bumps carry features and the MVP stays free to evolve.
 
-## [Unreleased]
+## [0.4.0] - 2026-11-24
 
 ### Added
 

@@ -31,8 +31,8 @@ script and the uberjar — in a directory on your `PATH`:
 
 ```sh
 mkdir -p ~/.local/opt/csb && cd ~/.local/opt/csb
-curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.3.1/csb
-curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.3.1/clojure-system-browser-0.3.1.jar
+curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.4.0/csb
+curl -sLO https://github.com/DevGiuDev/clojure-system-browser/releases/download/v0.4.0/clojure-system-browser-0.4.0.jar
 chmod +x csb
 export PATH="$HOME/.local/opt/csb:$PATH"
 csb --project /path/to/project
@@ -524,7 +524,7 @@ A subsequent reindexing failure is reported separately as `:reindex-error`.
 
 ## Releases
 
-Every `v*` tag (for example `v0.3.1`) runs a build-only GitHub Actions
+Every `v*` tag (for example `v0.4.0`) runs a build-only GitHub Actions
 workflow ([ADR 012](docs/decisions/012-release-packaging.md)) that publishes
 two assets to [GitHub Releases](https://github.com/DevGiuDev/clojure-system-browser/releases):
 the TUI/CLI uberjar and the `csb` launcher script. The workflow runs no
@@ -533,7 +533,7 @@ tests and makes no verification claims; checks stay local as recorded in
 
 ```sh
 clojure -T:build uber
-git tag v0.3.1 && git push origin v0.3.1
+git tag v0.4.0 && git push origin v0.4.0
 ```
 
 See [Installation](#installation) to install the published assets.

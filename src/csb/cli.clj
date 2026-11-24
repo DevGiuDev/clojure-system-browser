@@ -3,7 +3,7 @@
             [csb.service :as service]))
 
 ;; Application version, kept in sync with CHANGELOG.md (ADR 011).
-(def version "0.3.1")
+(def version "0.4.0")
 
 (defn arguments [args]
   (loop [args args options {:project "."}]

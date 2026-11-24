@@ -1,19 +1,36 @@
 # Implementation verification
 
-Date: 2026-11-15. Updated: 2026-11-22. This record distinguishes checks that
+Date: 2026-11-15. Updated: 2026-11-24. This record distinguishes checks that
 were executed from prepared verifications.
 
 ## Summary of the latest recorded results
 
 | Check | Tests | Assertions | Result |
 |---|---:|---:|---|
-| Core, including settings files and the session round-trip | 68 | 538 | No failures or errors; JDK 27 |
+| Core, including settings files and the session round-trip | 69 | 540 | No failures or errors; JDK 27 |
 | Desktop with headless JavaFX controls | 22 | 235 | No failures or errors; JDK 27 |
 | TUI with virtual terminal | 24 | 297 | No failures or errors; JDK 27 |
 | nREPL and test process integration | 14 | 130 | No failures or errors; JDK 27 |
-| Suite total | **128** | **1200** | No failures or errors |
+| Suite total | **129** | **1202** | No failures or errors |
 | Production TUI with PTY/Vim | — | — | Not re-run here (pexpect/pyte unavailable); last recorded 40-check run predates this change |
 | clj-kondo | — | — | 0 errors, 0 warnings |
+
+## Release 0.4.0 (2026-11-24)
+
+After the 0.4.0 version bump, all suites and clj-kondo were re-run on Linux
+with JDK 27 (selected by prepending its `bin` to the `PATH`):
+`clojure -Srepro -M:test` (69 / 540, now including the Clojure 1.8 test
+worker guard), `clojure -Srepro -M:live-test` (14 / 130),
+`clojure -Srepro -M:desktop:desktop-test` (22 / 235) and
+`clojure -Srepro -M:tui:tui-test` (24 / 297), all with zero failures and
+errors; `clj-kondo --lint src apps test test-desktop test-tui test-support
+deps.edn build.clj` with 0 errors and 0 warnings. `clojure -Srepro -T:build
+version` printed `0.4.0`, matching the release tag `v0.4.0`. The features accumulated
+since 0.3.1 (comment block evaluation, Uses panel and namespace tree, TUI
+search, Lazytest suites, the `:runner` alias conventions and EDN settings)
+were verified when they landed, in their sections below. No production
+Desktop or TUI interaction was re-run for the release itself; the latest
+recorded runs remain the 2026-11-22 entries.
 
 ## Settings files (ADR 025) — 2026-11-22
 
