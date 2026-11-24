@@ -271,7 +271,7 @@ placement remain unimplemented.
 
 ## Desktop visual theme and icons (2026-11-22)
 
-The Desktop visual plan (`prompts/002-estilo-desktop.md`) is implemented
+The Desktop visual theme is implemented
 ([ADR 018](decisions/018-desktop-visual-theme.md)). `theme.css` centralizes
 the light green-tinted palette as named `-csb-*` variables loaded from the
 scene, `code-editor.css` reuses them keeping the lexical classes, one 16 px

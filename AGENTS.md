@@ -9,11 +9,10 @@ take precedence over this document.
 2. `docs/roadmap.md`: current scope and pending work.
 3. `docs/verification.md`: what has actually been tested and with which environment.
 4. `docs/architecture.md` and `docs/decisions/`: boundaries and technical decisions.
-5. `clojure-system-browser-project-prompt.md`: complete original specification.
 
-The specification also describes future phases. Their presence in that document
-does not mean they should be implemented in the current task nor that they are
-available. The observed code and verifications determine the actual state.
+Future phases named anywhere in the documentation do not mean they should be
+implemented in the current task nor that they are available. The observed code
+and verifications determine the actual state.
 
 ## Product scope
 
